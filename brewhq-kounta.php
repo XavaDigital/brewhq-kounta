@@ -92,10 +92,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             add_action('wp_ajax_xwcposSyncOrder', array($this, 'xwcposSyncOrder'));
 
             //Schedule product sync function with WP CRON
-            // add_action('xwcposSyncAll_hook', array($this, 'xwcposSyncAllProdsCRON'));
-            // if ( ! wp_next_scheduled( 'xwcposSyncAll_hook' ) ) {
-            //   wp_schedule_event( time(), 'hourly', 'xwcposSyncAll_hook' );
-            // }
+            add_action('xwcposSyncAll_hook', array($this, 'xwcposSyncAllProdsCRON'));
+            if ( ! wp_next_scheduled( 'xwcposSyncAll_hook' ) ) {
+              wp_schedule_event( time(), 'hourly', 'xwcposSyncAll_hook' );
+            }
 
             //add_action('http_api_curl', array($this, 'xwcpos_curl_img_upload'), 10, 3);
             
