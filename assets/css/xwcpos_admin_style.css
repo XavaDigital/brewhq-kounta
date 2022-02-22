@@ -1,0 +1,81 @@
+.xwcpos_section {
+	margin-bottom: 60px;
+}
+
+.xwcpos_main {
+	display: inline-block;
+	width: 100%;
+	margin-top: 20px;
+}
+
+.xwcpos_main label {
+	width: 150px;
+	float: left;
+	font-weight: bold;
+	font-size: 16px;
+	margin-top: 9px;
+}
+
+.xwcpos_field {
+	width: 500px;
+	float: left;
+	padding: 10px;
+}
+
+.xwcpos_ls {
+	background: url("../images/ls.png");
+	background-repeat: no-repeat;
+	background-position: left-center;
+	background-color: white;
+	padding: 15px 10px 15px 60px;
+	border: 1px solid silver;
+	border-radius: 3px;
+	text-decoration: none;
+	color: inherit;
+	font-weight: bold;
+}
+
+.lsclass {
+	margin-top: 100px !important;
+	float: left;
+}
+
+.import_ls_cats {
+	margin-top: 50px;
+}
+
+.errosmessage {
+	display: none;
+}
+
+.success_message {
+	display: none;
+}
+
+.spinner_wrapper {
+	display: inline-block;
+}
+
+.spinner {
+	visibility: visible !important;
+	display: none;
+	float: right;
+}
+
+.loadbtu {
+	margin-top: 15px;
+}
+
+.last_load {
+	width: auto;
+	margin-top: 15px;
+	font-size: 15px;
+}
+
+.errpro {
+	color: red;
+}
+
+.successpro {
+	color: green;
+}
