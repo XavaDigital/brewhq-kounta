@@ -118,7 +118,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
              * 
              */
             
-            add_action('woocommerce_payment_complete_order_status_processing', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            add_action('woocommerce_payment_complete', array($this, 'xwcpos_add_order_to_kounta'), 9999);
             
             add_action('woocommerce_order_status_on-hold', array($this, 'xwcpos_add_order_to_kounta'), 9999);
 
@@ -703,7 +703,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             
             $last_sync = intval($date->format('U'));
             $lapsed = time() - $last_sync;
-            $this->plugin_log('Product ID:'.$item->id .' Lapsed: '.$lapsed);
+            //$this->plugin_log('Product ID:'.$item->id .' Lapsed: '.$lapsed);
 
             //if($item->wc_prod_id != null){
               if($item->wc_prod_id != null && $lapsed > $refresh_time){
