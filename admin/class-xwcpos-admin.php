@@ -515,7 +515,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
                 return $orderby_statement;
                 
             global $pagenow;
-            if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "product" && str_contains($_GET['orderby'], 'xwcpos_item_id') && !isset($_GET['filter_action'])) {
+            if ($pagenow == 'edit.php' && isset($_GET['orderby']) && $wp_query->get("post_type") === "product" && str_contains($_GET['orderby'], 'xwcpos_item_id') && !isset($_GET['filter_action'])) {
                 if( str_contains($_GET['order'], 'asc'))return "(m1.meta_value) ASC";
                 if( str_contains($_GET['order'], 'desc'))return "(m1.meta_value) DESC";
             } else {
@@ -529,8 +529,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
                 return $join_paged_statement;
 
                 global $pagenow;
-
-                if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "product" && str_contains($_GET['orderby'], 'xwcpos_item_id')) {
+              
+                if ($pagenow == 'edit.php' && isset($_GET['orderby']) && $wp_query->get("post_type") === "product" && str_contains($_GET['orderby'], 'xwcpos_item_id')) {
                     # In this trivial example add a reverse menu order sort
                     return "LEFT JOIN wp_postmeta m1 ON wp_posts.ID = m1.post_id AND m1.meta_key='_xwcpos_item_id'";
                 } else {

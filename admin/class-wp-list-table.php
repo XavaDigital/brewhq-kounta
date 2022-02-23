@@ -2157,8 +2157,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
         public function xwcpos_process_bulk_action()
         {
-            $main_class_obj = new BrewHQ_Kounta_POS_Int();
-            $main_class_obj->sync_inventory();
+            //$main_class_obj = new BrewHQ_Kounta_POS_Int();
+            // $main_class_obj->sync_inventory();
 
             if ($this->current_action() == 'import_and_sync') {
                 $this->xwcpos_process_bulk_import(true);
@@ -2290,6 +2290,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
         public function xwcpos_process_bulk_update()
         {
+            
 
           $this->plugin_log('/**** Process initiated: Bulk Update ****/ ');
           $this->plugin_log('Process initiated: Bulk Update');
@@ -2325,15 +2326,15 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
             if (isset($_POST['bulk-delete']) && is_array($_POST['bulk-delete'])) {
 
-              // $main_class_obj = new BrewHQ_Kounta_POS_Int();
-              // $main_class_obj->sync_inventory();
+              $main_class_obj = new BrewHQ_Kounta_POS_Int();
+              $main_class_obj->sync_inventory();
 
                 $count = count($_POST['bulk-delete']);
 
                 foreach ($_POST['bulk-delete'] as $key => $product_id) {
                   $result = $this->xwcpos_process_single_update($product_id, 'bulk');
                   $this->plugin_log('Product updated. ID:'.$product_id);
-                  usleep(1000000);
+                  usleep(250000);
                 }
 
                 $this->plugin_log('Process completed: Bulk update. Count:'.$count);

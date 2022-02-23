@@ -87,7 +87,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             add_action('wp_ajax_xwcposImpCats', array($this, 'xwcposImpCats'));
             add_action('wp_ajax_xwcposImpProds', array($this, 'xwcposImpProds'));
             add_action('wp_ajax_xwcposSyncAllProds', array($this, 'xwcposSyncAllProds'));
-            add_action('wp_ajax_xwcposSyncProds', array($this, 'xwcposSyncProds'));
+            //add_action('wp_ajax_xwcposSyncProds', array($this, 'xwcposSyncProds'));
             add_action('wp_ajax_xwcposCheckCart', array($this, 'xwcposCheckCart'));
             add_action('wp_ajax_xwcposSyncOrder', array($this, 'xwcposSyncOrder'));
 
@@ -117,10 +117,6 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
              * Customer data update
              * 
              */
-
-            /* Push stock level change to Kounta (Not available in Kounta) */
-            // add_action('woocommerce_product_set_stock', array($this, 'xwcpos_product_inventory_sync'), 10);
-            // add_action('woocommerce_variation_set_stock', array($this, 'xwcpos_product_inventory_sync'), 10);
             
             add_action('woocommerce_payment_complete_order_status_processing', array($this, 'xwcpos_add_order_to_kounta'), 9999);
             
@@ -131,11 +127,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             /* Check cart items for current stock levels */
            // add_action('woocommerce_before_checkout_process', array($this, 'xwcpos_update_inventory_checkout'));
            //add_action('woocommerce_check_cart_items', array($this, 'xwcpos_update_inventory_checkout'));
+
            add_action( 'wp_footer', array($this, 'xwcpos_add_jscript_checkout_and_cart'), 9999 );
-
-           
-           
-
         }
 
         
@@ -557,7 +550,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         public function xwcpos_make_api_call($controlname, $action, $query_str = '', $data = array(), $unique_id = null, Closure $callback = null)
         {
-
+          $this->plugin_log('Making API call. '.$controlname.' Query:'.$query_str);
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $xwcpos_token = esc_attr(get_option('xwcpos_access_token'));
             $client_id = esc_attr(get_option('xwcpos_client_id'));
@@ -686,9 +679,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         {
           //get inventory from Kounta and update database
           $this->sync_inventory();
+
           //sync wc_product quantity with kounta database
-
-
           $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
           $site_id = get_option('xwcpos_site_id');
           
@@ -713,7 +705,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $lapsed = time() - $last_sync;
             $this->plugin_log('Product ID:'.$item->id .' Lapsed: '.$lapsed);
 
-            if($item->wc_prod_id != null && $lapsed > $refresh_time){
+            //if($item->wc_prod_id != null){
+              if($item->wc_prod_id != null && $lapsed > $refresh_time){
+
               //if($item->wc_prod_id == 4630){
               $checked_count++;
               $result = $this->xwcpos_fetch_item_inventory($item->wc_prod_id);
@@ -722,30 +716,30 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
               $site_index = array_search($site_id, array_column($k_product->sites, 'id'));
               if($site_index !== null){
                 $prod_data = $k_product->sites[$site_index];
-
-                $old_item = (object)[];
-                $old_item->product_id = $item->id;
-                $old_item->wc_prod_id = $item->wc_prod_id;
-                $old_item->xwcpos_item_id = $item->id;
-
-                $site = (object)[];
-                $site = $prod_data;
-
-                $current_price = $this->xwcpos_item_price_check($site, $old_item);
-
-                if($current_price !== $prod_data->unit_price){
-                  //if price is different
-                  $this->xwcpos_update_item_price($site, $old_item);
-                  $this->xwcpos_update_item_prices($k_product, $old_item);
+                if($prod_data){
+                  $old_item = (object)[];
+                  $old_item->product_id = $item->id;
+                  $old_item->wc_prod_id = $item->wc_prod_id;
+                  $old_item->xwcpos_item_id = $item->id;
+  
+                  $site = (object)[];
+                  $site = $prod_data;
+  
+                  $current_price = floatval($this->xwcpos_item_price_check($site, $old_item));
+                  $kounta_price = $prod_data->unit_price;
+  
+                  if($current_price !== $kounta_price){
+                    //if price is different
+                    $this->xwcpos_update_item_price($site, $old_item);
+                    $this->xwcpos_update_item_prices($k_product, $old_item);
+                  }
                 }
-
-                
               }
-              
 
-              if($result) $count++;
+              if($result) 
+              $count++;
               //$this->plugin_log('Product updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Result: '.$result);
-              usleep(250000);
+              //usleep(250000);
            }
             if($lapsed < $refresh_time){
               //$this->plugin_log('Product not updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Lapsed: '.$lapsed);
@@ -781,9 +775,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
           foreach($inventory as $item){
             //get item with kounta id
             $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id = $item->id");
-            $old_item->xwcpos_item_id = $result;
-
             if($result){
+              $old_item->xwcpos_item_id = $result;      
               $site->id = $site_id;
               $site->stock = $item->stock;
               //$site->stock = 72;
@@ -794,6 +787,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         public function get_kounta_inventory(){
+          $this->plugin_log('Started getting inventory');
           $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $products = array();
             $products_remaining = true;
@@ -813,9 +807,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 if($new_products !== null && !isset($new_products->error)){
                   $products = array_merge($products, $new_products);
                   $last_product_id = end($products)->id;
-                } else if (isset($new_products->error)){
-                  return $new_products;
                 }
+                // } else if (isset($new_products->error)){
+                //   return $new_products;
+                // }
                 
                 if(isset($new_products)){
                   $count = count($new_products);
@@ -827,9 +822,14 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                   $products_remaining = false;
                 }
               } else {
+                $this->plugin_log('API limit exceeded while getting inventory');
+              
                 $products_remaining = false;
-                $return['error'] = "Limit exceeded";
-                return $return;
+                //$return['error'] = "Limit exceeded";
+                // if(count($products)>0){
+
+                // }
+                return $products;
               }
               
             }
@@ -1258,397 +1258,397 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         // }
 
-        public function xwcposSyncProds()
-        {
+        // public function xwcposSyncProds()
+        // {
 
-            if (isset($_POST['product_id'])) {
-                $product_id = (int) $_POST['product_id'];
-            } else {
-                return esc_html__('Could not find a product ID to sync with.', 'xwcpos');
-            }
+        //     if (isset($_POST['product_id'])) {
+        //         $product_id = (int) $_POST['product_id'];
+        //     } else {
+        //         return esc_html__('Could not find a product ID to sync with.', 'xwcpos');
+        //     }
 
-            $this->xwcpos_send_product_to_kounta($product_id);
-            echo json_encode(
-                array(
-                    'succ' => esc_html__('Product successfully synced with Kounta.', 'xwcpos'),
-                )
-            );
+        //     $this->xwcpos_send_product_to_kounta($product_id);
+        //     echo json_encode(
+        //         array(
+        //             'succ' => esc_html__('Product successfully synced with Kounta.', 'xwcpos'),
+        //         )
+        //     );
 
-            die();
-        }
+        //     die();
+        // }
 
-        public function xwcpos_send_product_to_kounta($product_id)
-        {
-            $wc_product = wc_get_product($product_id);
+        // public function xwcpos_send_product_to_kounta($product_id)
+        // {
+        //     $wc_product = wc_get_product($product_id);
 
-            if ($wc_product->is_type('variable')) {
-                return $this->xwcpos_send_matrix_product($wc_product);
-            } else if ($wc_product->is_type('simple')) {
-                return $this->xwcpos_send_simple_product($wc_product);
-            }
+        //     if ($wc_product->is_type('variable')) {
+        //         return $this->xwcpos_send_matrix_product($wc_product);
+        //     } else if ($wc_product->is_type('simple')) {
+        //         return $this->xwcpos_send_simple_product($wc_product);
+        //     }
 
-            return false;
-        }
+        //     return false;
+        // }
 
-        public function xwcpos_send_simple_product($wc_product)
-        {
+        // public function xwcpos_send_simple_product($wc_product)
+        // {
 
-            $prepare_data_json = $this->xwcpos_product_json_data($wc_product);
-            $k_prod_id = get_post_meta($wc_product->id, '_xwcpos_item_id', true );
-            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+        //     $prepare_data_json = $this->xwcpos_product_json_data($wc_product);
+        //     $k_prod_id = get_post_meta($wc_product->id, '_xwcpos_item_id', true );
+        //     $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
 
-            if($k_prod_id){
-              $result = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id .'/products/'.$k_prod_id, 'Update', '', json_encode($prepare_data_json));
-            } else {
-              $result = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id .'/products', 'Create', '', json_encode($prepare_data_json));
-            }
+        //     if($k_prod_id){
+        //       $result = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id .'/products/'.$k_prod_id, 'Update', '', json_encode($prepare_data_json));
+        //     } else {
+        //       $result = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id .'/products', 'Create', '', json_encode($prepare_data_json));
+        //     }
 
 
-            if ($result == '401') {
+        //     if ($result == '401') {
   
-              echo json_encode(
-                  array(
-                      'err' => esc_html__($result . "Connection with Kounta POS API is lost, please connect it first."),
-                  )
-              );
-              exit();
-            } else {
-              $this->xwcpos_process_images_upload($result->Item, $wc_product);
-            }
+        //       echo json_encode(
+        //           array(
+        //               'err' => esc_html__($result . "Connection with Kounta POS API is lost, please connect it first."),
+        //           )
+        //       );
+        //       exit();
+        //     } else {
+        //       $this->xwcpos_process_images_upload($result->Item, $wc_product);
+        //     }
            
 
-            $this->xwcpos_map_woocommerce_product_with_ls($result->Item, $wc_product->get_id());
-
-        }
-
-        public function xwcpos_send_matrix_product($wc_product)
-        {
-
-            $wc_attributes = $wc_product->get_attributes();
-            if (count($wc_attributes) > 3) {
-
-                echo json_encode(
-                    array(
-                        'err' => esc_html__("Kounta POS only allows a maximum of 3 attributes for matrix products, your product has more than 3 attributes."),
-                    )
-                );
-
-                return false;
-            }
-
-            $matrix_product_json_data = $this->xwcpos_product_json_data($wc_product);
-            $matrix_product_json_data->itemAttributeSetID = 4;
-            $result = $this->xwcpos_make_api_call('Account.ItemMatrix', 'Create', '', json_encode($matrix_product_json_data));
-
-            if (!is_wp_error($result) && isset($result->ItemMatrix->itemMatrixID)) {
-                $this->xwcpos_process_images_upload($result->ItemMatrix, $wc_product);
-                $this->xwcpos_map_woocommerce_product_with_ls($result->ItemMatrix, $wc_product->get_id());
-            } else {
-                return false;
-            }
-
-            $variations = $wc_product->get_available_variations();
-            if (!empty($variations) && isset($result->ItemMatrix->itemMatrixID)) {
-
-                foreach ($variations as $variation) {
-
-                    $variable_product = wc_get_product($variation['variation_id']);
-                    $prepare_data_json = $this->xwcpos_product_json_data($variable_product, $result->ItemMatrix->itemMatrixID);
-                    $this->prepare_product_attributes($prepare_data_json, $variable_product->get_variation_attributes());
-
-                    $res_variation = $this->xwcpos_make_api_call('Account.Item', 'Create', '', json_encode($prepare_data_json));
-                    if (!is_wp_error($res_variation) && isset($res_variation->Item)) {
-                        $this->xwcpos_process_images_upload($res_variation->Item, $variable_product);
-                        $this->xwcpos_map_woocommerce_product_with_ls($res_variation->Item, $variation['variation_id']);
-                    }
-                }
-            }
-
-            return true;
-        }
-
-        public function prepare_product_attributes($item, $wc_pro_attributes)
-        {
-
-            $ItemAttributes = new stdClass();
-            $ItemAttributes->itemAttributeSetID = 4;
-            $id = 1;
-            foreach ($wc_pro_attributes as $key => $attr_val) {
-                $ItemAttributes->{'attribute' . $id++} = $attr_val;
-            }
-            for ($i = 1; $i < 4; $i++) {
-                if (!isset($ItemAttributes->{'attribute' . $i})) {
-                    $ItemAttributes->{'attribute' . $i} = "";
-                }
-            }
-
-            $item->ItemAttributes = $ItemAttributes;
-
-        }
-
-        public function xwcpos_process_images_upload($Item, $wc_product)
-        {
-
-            $wc_images = array();
-            $images_results = array();
-
-            if (!$wc_product->is_type('variation')) {
-                $wc_images = $wc_product->get_gallery_image_ids();
-            } else {
-                $variation_id = $wc_product->variation_id;
-            }
-            array_unshift($wc_images, $wc_product->get_image_id());
-            if (empty($wc_images)) {
-                return;
-            }
-
-            $matrix_id = 0;
-            if (!isset($Item->itemID) && isset($Item->itemMatrixID) && $Item->itemMatrixID > 0) {
-                $re_id = "itemMatrixID";
-                $matrix_id = $Item->itemMatrixID;
-            } elseif ($Item->itemID > 0) {
-                $re_id = "itemID";
-            }
-
-            $images_errors = array();
-            if (!empty($wc_images) && is_array($wc_images) && !empty($re_id)) {
-                foreach ($wc_images as $img_wc) {
-                    $image_result = $this->xwcpos_upload_image_on_ls($Item->{$re_id}, $img_wc, $matrix_id);
-
-                    if (is_wp_error($image_result)) {
-                        $images_errors[] = $image_result;
-                    } else {
-                        $images_results[] = $image_result;
-                    }
-                }
+        //     $this->xwcpos_map_woocommerce_product_with_ls($result->Item, $wc_product->get_id());
+
+        // }
+
+        // public function xwcpos_send_matrix_product($wc_product)
+        // {
+
+        //     $wc_attributes = $wc_product->get_attributes();
+        //     if (count($wc_attributes) > 3) {
+
+        //         echo json_encode(
+        //             array(
+        //                 'err' => esc_html__("Kounta POS only allows a maximum of 3 attributes for matrix products, your product has more than 3 attributes."),
+        //             )
+        //         );
+
+        //         return false;
+        //     }
+
+        //     $matrix_product_json_data = $this->xwcpos_product_json_data($wc_product);
+        //     $matrix_product_json_data->itemAttributeSetID = 4;
+        //     $result = $this->xwcpos_make_api_call('Account.ItemMatrix', 'Create', '', json_encode($matrix_product_json_data));
+
+        //     if (!is_wp_error($result) && isset($result->ItemMatrix->itemMatrixID)) {
+        //         $this->xwcpos_process_images_upload($result->ItemMatrix, $wc_product);
+        //         $this->xwcpos_map_woocommerce_product_with_ls($result->ItemMatrix, $wc_product->get_id());
+        //     } else {
+        //         return false;
+        //     }
+
+        //     $variations = $wc_product->get_available_variations();
+        //     if (!empty($variations) && isset($result->ItemMatrix->itemMatrixID)) {
+
+        //         foreach ($variations as $variation) {
+
+        //             $variable_product = wc_get_product($variation['variation_id']);
+        //             $prepare_data_json = $this->xwcpos_product_json_data($variable_product, $result->ItemMatrix->itemMatrixID);
+        //             $this->prepare_product_attributes($prepare_data_json, $variable_product->get_variation_attributes());
+
+        //             $res_variation = $this->xwcpos_make_api_call('Account.Item', 'Create', '', json_encode($prepare_data_json));
+        //             if (!is_wp_error($res_variation) && isset($res_variation->Item)) {
+        //                 $this->xwcpos_process_images_upload($res_variation->Item, $variable_product);
+        //                 $this->xwcpos_map_woocommerce_product_with_ls($res_variation->Item, $variation['variation_id']);
+        //             }
+        //         }
+        //     }
+
+        //     return true;
+        // }
+
+        // public function prepare_product_attributes($item, $wc_pro_attributes)
+        // {
+
+        //     $ItemAttributes = new stdClass();
+        //     $ItemAttributes->itemAttributeSetID = 4;
+        //     $id = 1;
+        //     foreach ($wc_pro_attributes as $key => $attr_val) {
+        //         $ItemAttributes->{'attribute' . $id++} = $attr_val;
+        //     }
+        //     for ($i = 1; $i < 4; $i++) {
+        //         if (!isset($ItemAttributes->{'attribute' . $i})) {
+        //             $ItemAttributes->{'attribute' . $i} = "";
+        //         }
+        //     }
+
+        //     $item->ItemAttributes = $ItemAttributes;
+
+        // }
+
+        // public function xwcpos_process_images_upload($Item, $wc_product)
+        // {
+
+        //     $wc_images = array();
+        //     $images_results = array();
+
+        //     if (!$wc_product->is_type('variation')) {
+        //         $wc_images = $wc_product->get_gallery_image_ids();
+        //     } else {
+        //         $variation_id = $wc_product->variation_id;
+        //     }
+        //     array_unshift($wc_images, $wc_product->get_image_id());
+        //     if (empty($wc_images)) {
+        //         return;
+        //     }
+
+        //     $matrix_id = 0;
+        //     if (!isset($Item->itemID) && isset($Item->itemMatrixID) && $Item->itemMatrixID > 0) {
+        //         $re_id = "itemMatrixID";
+        //         $matrix_id = $Item->itemMatrixID;
+        //     } elseif ($Item->itemID > 0) {
+        //         $re_id = "itemID";
+        //     }
+
+        //     $images_errors = array();
+        //     if (!empty($wc_images) && is_array($wc_images) && !empty($re_id)) {
+        //         foreach ($wc_images as $img_wc) {
+        //             $image_result = $this->xwcpos_upload_image_on_ls($Item->{$re_id}, $img_wc, $matrix_id);
+
+        //             if (is_wp_error($image_result)) {
+        //                 $images_errors[] = $image_result;
+        //             } else {
+        //                 $images_results[] = $image_result;
+        //             }
+        //         }
 
-            } else {
-                $single_image_id = isset($variation_id) ? get_post_thumbnail_id($variation_id) : $wc_product->get_image_id();
+        //     } else {
+        //         $single_image_id = isset($variation_id) ? get_post_thumbnail_id($variation_id) : $wc_product->get_image_id();
 
-                if ($single_image_id > 0 && !empty($re_id)) {
-                    $image_result = $this->xwcpos_upload_image_on_ls($Item->{$re_id}, $single_image_id, $matrix_id);
-                    if (is_wp_error($image_result)) {
-                        $images_errors[] = $image_result;
-                    } else {
-                        $images_results[] = $image_result;
-                    }
-                    $images_results[] = $image_result;
-                }
-            }
+        //         if ($single_image_id > 0 && !empty($re_id)) {
+        //             $image_result = $this->xwcpos_upload_image_on_ls($Item->{$re_id}, $single_image_id, $matrix_id);
+        //             if (is_wp_error($image_result)) {
+        //                 $images_errors[] = $image_result;
+        //             } else {
+        //                 $images_results[] = $image_result;
+        //             }
+        //             $images_results[] = $image_result;
+        //         }
+        //     }
 
-            if (!empty($images_results)) {
-                $Item->Images = new stdClass();
-                if (count($images_results) > 1) {
-                    $Item->Images->Image = $images_results;
-                } else if (count($images_results) == 1) {
-                    $Item->Images->Image = $images_results[0];
-                }
-            }
-        }
+        //     if (!empty($images_results)) {
+        //         $Item->Images = new stdClass();
+        //         if (count($images_results) > 1) {
+        //             $Item->Images->Image = $images_results;
+        //         } else if (count($images_results) == 1) {
+        //             $Item->Images->Image = $images_results[0];
+        //         }
+        //     }
+        // }
 
-        public function xwcpos_upload_image_on_ls($ls_product_id, $wc_image_product_id, $matrix_id = 0)
-        {
+        // public function xwcpos_upload_image_on_ls($ls_product_id, $wc_image_product_id, $matrix_id = 0)
+        // {
 
-            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-
-            if (!function_exists('curl_init') || !function_exists('curl_exec') || !class_exists('CURLFile')) {
-                return false;
-            }
-
-            $add_headers = function (WP_MOScURL &$curl, &$body) use ($wc_image_product_id, $matrix_id) {
-
-                $headers = array(
-                    'accept' => 'application/xml',
-                    'wc-img-id' => $wc_image_product_id,
-                );
-
-                if ($matrix_id > 0) {
-                    $headers['matrix-id'] = $matrix_id;
-                }
-
-                $curl->setHTTPHeader($headers);
-            };
-
-            $item_path = $matrix_id > 0 ? "/ItemMatrix/" : "/Item/";
-
-            $result = $this->xwcpos_make_api_call(
-                'Account/' . $xwcpos_account_id . $item_path . $ls_product_id . '/Image',
-                'Create',
-                null,
-                null,
-                null,
-                $add_headers
-            );
-
-            return $result;
-
-        }
-
-        public function xwcpos_product_json_data($wc_product, $matrix_id = 0)
-        {
-
-            global $wpdb;
-            $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
-
-            $kounta_product = new stdClass();
-            $kounta_product->sku = $wc_product->get_sku();
-            $kounta_product->name = $wc_product->get_title();
-            //$kounta_product->defaultCost = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
-
-            //$price = wc_get_price_excluding_tax($wc_product->id);
-
-            if ($matrix_id > 0) {
-                $attributes = $wc_product->get_variation_attributes();
-                $kounta_product->description = $kounta_product->description . ' ' . implode(' ', $attributes);
-            }
-
-            if ($matrix_id > 0) {
-                $kounta_product->itemMatrixID = $matrix_id;
-            }
-
-            //Product Categories
-            $wc_categories = wp_get_post_terms($wc_product->get_id(), 'product_cat');
-            if (!empty($wc_categories)) {
-
-                if (isset($wc_categories[0]->term_id)) {
-
-                    $result = $wpdb->get_row($wpdb->prepare("SELECT * FROM $wpdb->xwcpos_item_categories WHERE wc_cat_id = %d", $wc_categories[0]->term_id));
-
-                    if (!empty($result)) {
-
-                        $kounta_product->categoryID = $result->category_id;
-                    }
-
-                }
-
-            }
-
-            $this->xwcpos_build_json_item_e_commerce($kounta_product, $wc_product);
-
-            $this->xwcpos_build_json_item_pricing($kounta_product, $wc_product, false);
-
-            if ($wc_product->is_type('simple')) {
-                $this->xwcpos_build_json_item_shop_data($kounta_product, $wc_product);
-                return apply_filters('xwcpos_sync_with_ls_simple_product', $kounta_product, $wc_product);
-            } else if ($wc_product->is_type('variable')) {
-                return apply_filters('xwcpos_sync_with_ls_matrix_product', $kounta_product, $wc_product);
-            } else if ($wc_product->is_type('variation')) {
-                $this->xwcpos_build_json_item_shop_data($kounta_product, $wc_product);
-                return apply_filters('xwcpos_sync_with_ls_variation_product', $kounta_product, $wc_product);
-            } else {
-                return false;
-            }
-
-        }
-
-        public function xwcpos_build_json_item_e_commerce($lspeed_product, $wc_product)
-        {
-
-            $itemeCommerce = new stdClass();
-            $itemeCommerce->longDescription = $wc_product->get_description();
-            $itemeCommerce->shortDescription = $wc_product->get_short_description();
-            $weight = $wc_product->get_weight();
-            $width = $wc_product->get_width();
-            $height = $wc_product->get_height();
-            $length = $wc_product->get_length();
-            $itemeCommerce->weight = empty($weight) ? 0 : $weight;
-            $itemeCommerce->width = empty($width) ? 0 : $width;
-            $itemeCommerce->height = empty($height) ? 0 : $height;
-            $itemeCommerce->length = empty($length) ? 0 : $length;
-            $lspeed_product->ItemECommerce = $itemeCommerce;
-        }
-
-        public function xwcpos_build_json_item_pricing($lspeed_product, $wc_product, $set_sale_price = true)
-        {
-
-            $lspeed_product->Prices = array();
-
-            $ItemPriceDefault = new stdClass();
-            $ItemPriceDefault->ItemPrice = new stdClass();
-            $ItemPriceDefault->ItemPrice->useType = 'default';
-            $ItemPriceDefault->ItemPrice->amount = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
-
-            $ItemPriceMSRP = new stdClass();
-            $ItemPriceMSRP->ItemPrice = new stdClass();
-            $ItemPriceMSRP->ItemPrice->useType = 'MSRP';
-            $ItemPriceMSRP->ItemPrice->amount = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
-
-            $lspeed_product->Prices[] = $ItemPriceDefault;
-            $lspeed_product->Prices[] = $ItemPriceMSRP;
-
-            if ($set_sale_price) {
-                $ItemPriceSale = new stdClass();
-                $ItemPriceSale->ItemPrice = new stdClass();
-
-                $ItemPriceSale->ItemPrice->amount =
-                empty($wc_product->get_sale_price()) ? '0.00' : $wc_product->get_sale_price();
-
-                $ItemPriceSale->ItemPrice->useType = 'Sale';
-                $lspeed_product->Prices[] = $ItemPriceSale;
-            }
-        }
-
-        public function xwcpos_build_json_item_shop_data($lspeed_product, $wc_product)
-        {
-
-            $shop_data = get_option('xwcpos_site_data');
-            if (isset($shop_data['xwcpos_store_data'])) {
-                $shop_data = $shop_data['xwcpos_store_data'];
-            } else {
-                $shop_data = false;
-            }
-
-            $inventory = $wc_product->get_stock_quantity();
-
-            $ItemShops = array();
-            if (false !== $shop_data && isset($shop_data->Shop) && is_array($shop_data->Shop)) {
-                foreach ($shop_data->Shop as $shop) {
-                    $ItemShop = new stdClass();
-                    $ItemShop->ItemShop = new stdClass();
-                    $ItemShop->ItemShop->shopID = $shop->shopID;
-                    $ItemShop->ItemShop->qoh = empty($inventory) ? 0 : $inventory;
-                    $ItemShops[] = $ItemShop;
-                }
-            } else if (false !== $shop_data && isset($shop_data->Shop) && is_object($shop_data->Shop)) {
-                $ItemShop = new stdClass();
-                $ItemShop->ItemShop = new stdClass();
-                $ItemShop->ItemShop->shopID = $shop_data->Shop->shopID;
-                $ItemShop->ItemShop->qoh = empty($inventory) ? 0 : $inventory;
-                $ItemShops[] = $ItemShop;
-            } else {
-                return false;
-            }
-            $lspeed_product->ItemShops = $ItemShops;
-
-            return true;
-
-        }
-
-        public function xwcpos_map_woocommerce_product_with_ls($ls_Item, $wc_product_id)
-        {
-
-            $ls_Item->wc_prod_id = $wc_product_id;
-            $ls_Item->xwcpos_is_synced = true;
-            $ls_Item->xwcpos_import_date = current_time('mysql');
-            $ls_Item->xwcpos_last_sync_date = current_time('mysql');
-            update_post_meta($wc_product_id, '_xwcpos_sync', true);
-
-            $xwcpos_id = $this->xwcpos_insert_item($ls_Item);
-
-            $item = $this->xwcpos_get_sing_item($xwcpos_id);
-
-            if ($item->item_id > 0 && $item->item_matrix_id == 0) {
-                //single item
-                update_post_meta($wc_product_id, '_xwcpos_item_id', $item->item_id);
-            } else if ($item->item_id > 0 && $item->item_matrix_id > 0) {
-                //single variation
-                update_post_meta($wc_product_id, '_xwcpos_item_id', $item->item_id);
-            } else if ((is_null($item->item_id) || $item->item_id == 0) && $item->item_matrix_id > 0) {
-                //matrix item
-                update_post_meta($wc_product_id, '_xwcpos_matrix_id', $item->item_matrix_id);
-            }
-
-        }
+        //     $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+
+        //     if (!function_exists('curl_init') || !function_exists('curl_exec') || !class_exists('CURLFile')) {
+        //         return false;
+        //     }
+
+        //     $add_headers = function (WP_MOScURL &$curl, &$body) use ($wc_image_product_id, $matrix_id) {
+
+        //         $headers = array(
+        //             'accept' => 'application/xml',
+        //             'wc-img-id' => $wc_image_product_id,
+        //         );
+
+        //         if ($matrix_id > 0) {
+        //             $headers['matrix-id'] = $matrix_id;
+        //         }
+
+        //         $curl->setHTTPHeader($headers);
+        //     };
+
+        //     $item_path = $matrix_id > 0 ? "/ItemMatrix/" : "/Item/";
+
+        //     $result = $this->xwcpos_make_api_call(
+        //         'Account/' . $xwcpos_account_id . $item_path . $ls_product_id . '/Image',
+        //         'Create',
+        //         null,
+        //         null,
+        //         null,
+        //         $add_headers
+        //     );
+
+        //     return $result;
+
+        // }
+
+        // public function xwcpos_product_json_data($wc_product, $matrix_id = 0)
+        // {
+
+        //     global $wpdb;
+        //     $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
+
+        //     $kounta_product = new stdClass();
+        //     $kounta_product->sku = $wc_product->get_sku();
+        //     $kounta_product->name = $wc_product->get_title();
+        //     //$kounta_product->defaultCost = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
+
+        //     //$price = wc_get_price_excluding_tax($wc_product->id);
+
+        //     if ($matrix_id > 0) {
+        //         $attributes = $wc_product->get_variation_attributes();
+        //         $kounta_product->description = $kounta_product->description . ' ' . implode(' ', $attributes);
+        //     }
+
+        //     if ($matrix_id > 0) {
+        //         $kounta_product->itemMatrixID = $matrix_id;
+        //     }
+
+        //     //Product Categories
+        //     $wc_categories = wp_get_post_terms($wc_product->get_id(), 'product_cat');
+        //     if (!empty($wc_categories)) {
+
+        //         if (isset($wc_categories[0]->term_id)) {
+
+        //             $result = $wpdb->get_row($wpdb->prepare("SELECT * FROM $wpdb->xwcpos_item_categories WHERE wc_cat_id = %d", $wc_categories[0]->term_id));
+
+        //             if (!empty($result)) {
+
+        //                 $kounta_product->categoryID = $result->category_id;
+        //             }
+
+        //         }
+
+        //     }
+
+        //     $this->xwcpos_build_json_item_e_commerce($kounta_product, $wc_product);
+
+        //     $this->xwcpos_build_json_item_pricing($kounta_product, $wc_product, false);
+
+        //     if ($wc_product->is_type('simple')) {
+        //         $this->xwcpos_build_json_item_shop_data($kounta_product, $wc_product);
+        //         return apply_filters('xwcpos_sync_with_ls_simple_product', $kounta_product, $wc_product);
+        //     } else if ($wc_product->is_type('variable')) {
+        //         return apply_filters('xwcpos_sync_with_ls_matrix_product', $kounta_product, $wc_product);
+        //     } else if ($wc_product->is_type('variation')) {
+        //         $this->xwcpos_build_json_item_shop_data($kounta_product, $wc_product);
+        //         return apply_filters('xwcpos_sync_with_ls_variation_product', $kounta_product, $wc_product);
+        //     } else {
+        //         return false;
+        //     }
+
+        // }
+
+        // public function xwcpos_build_json_item_e_commerce($lspeed_product, $wc_product)
+        // {
+
+        //     $itemeCommerce = new stdClass();
+        //     $itemeCommerce->longDescription = $wc_product->get_description();
+        //     $itemeCommerce->shortDescription = $wc_product->get_short_description();
+        //     $weight = $wc_product->get_weight();
+        //     $width = $wc_product->get_width();
+        //     $height = $wc_product->get_height();
+        //     $length = $wc_product->get_length();
+        //     $itemeCommerce->weight = empty($weight) ? 0 : $weight;
+        //     $itemeCommerce->width = empty($width) ? 0 : $width;
+        //     $itemeCommerce->height = empty($height) ? 0 : $height;
+        //     $itemeCommerce->length = empty($length) ? 0 : $length;
+        //     $lspeed_product->ItemECommerce = $itemeCommerce;
+        // }
+
+        // public function xwcpos_build_json_item_pricing($lspeed_product, $wc_product, $set_sale_price = true)
+        // {
+
+        //     $lspeed_product->Prices = array();
+
+        //     $ItemPriceDefault = new stdClass();
+        //     $ItemPriceDefault->ItemPrice = new stdClass();
+        //     $ItemPriceDefault->ItemPrice->useType = 'default';
+        //     $ItemPriceDefault->ItemPrice->amount = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
+
+        //     $ItemPriceMSRP = new stdClass();
+        //     $ItemPriceMSRP->ItemPrice = new stdClass();
+        //     $ItemPriceMSRP->ItemPrice->useType = 'MSRP';
+        //     $ItemPriceMSRP->ItemPrice->amount = empty($wc_product->get_regular_price()) ? '0.00' : $wc_product->get_regular_price();
+
+        //     $lspeed_product->Prices[] = $ItemPriceDefault;
+        //     $lspeed_product->Prices[] = $ItemPriceMSRP;
+
+        //     if ($set_sale_price) {
+        //         $ItemPriceSale = new stdClass();
+        //         $ItemPriceSale->ItemPrice = new stdClass();
+
+        //         $ItemPriceSale->ItemPrice->amount =
+        //         empty($wc_product->get_sale_price()) ? '0.00' : $wc_product->get_sale_price();
+
+        //         $ItemPriceSale->ItemPrice->useType = 'Sale';
+        //         $lspeed_product->Prices[] = $ItemPriceSale;
+        //     }
+        // }
+
+        // public function xwcpos_build_json_item_shop_data($lspeed_product, $wc_product)
+        // {
+
+        //     $shop_data = get_option('xwcpos_site_data');
+        //     if (isset($shop_data['xwcpos_store_data'])) {
+        //         $shop_data = $shop_data['xwcpos_store_data'];
+        //     } else {
+        //         $shop_data = false;
+        //     }
+
+        //     $inventory = $wc_product->get_stock_quantity();
+
+        //     $ItemShops = array();
+        //     if (false !== $shop_data && isset($shop_data->Shop) && is_array($shop_data->Shop)) {
+        //         foreach ($shop_data->Shop as $shop) {
+        //             $ItemShop = new stdClass();
+        //             $ItemShop->ItemShop = new stdClass();
+        //             $ItemShop->ItemShop->shopID = $shop->shopID;
+        //             $ItemShop->ItemShop->qoh = empty($inventory) ? 0 : $inventory;
+        //             $ItemShops[] = $ItemShop;
+        //         }
+        //     } else if (false !== $shop_data && isset($shop_data->Shop) && is_object($shop_data->Shop)) {
+        //         $ItemShop = new stdClass();
+        //         $ItemShop->ItemShop = new stdClass();
+        //         $ItemShop->ItemShop->shopID = $shop_data->Shop->shopID;
+        //         $ItemShop->ItemShop->qoh = empty($inventory) ? 0 : $inventory;
+        //         $ItemShops[] = $ItemShop;
+        //     } else {
+        //         return false;
+        //     }
+        //     $lspeed_product->ItemShops = $ItemShops;
+
+        //     return true;
+
+        // }
+
+        // public function xwcpos_map_woocommerce_product_with_ls($ls_Item, $wc_product_id)
+        // {
+
+        //     $ls_Item->wc_prod_id = $wc_product_id;
+        //     $ls_Item->xwcpos_is_synced = true;
+        //     $ls_Item->xwcpos_import_date = current_time('mysql');
+        //     $ls_Item->xwcpos_last_sync_date = current_time('mysql');
+        //     update_post_meta($wc_product_id, '_xwcpos_sync', true);
+
+        //     $xwcpos_id = $this->xwcpos_insert_item($ls_Item);
+
+        //     $item = $this->xwcpos_get_sing_item($xwcpos_id);
+
+        //     if ($item->item_id > 0 && $item->item_matrix_id == 0) {
+        //         //single item
+        //         update_post_meta($wc_product_id, '_xwcpos_item_id', $item->item_id);
+        //     } else if ($item->item_id > 0 && $item->item_matrix_id > 0) {
+        //         //single variation
+        //         update_post_meta($wc_product_id, '_xwcpos_item_id', $item->item_id);
+        //     } else if ((is_null($item->item_id) || $item->item_id == 0) && $item->item_matrix_id > 0) {
+        //         //matrix item
+        //         update_post_meta($wc_product_id, '_xwcpos_matrix_id', $item->item_matrix_id);
+        //     }
+
+        // }
 
         public function xwcpos_get_sing_item($item_id)
         {
@@ -1662,53 +1662,53 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         }
 
-        public function xwcpos_curl_img_upload($curl_handle, $r, $url)
-        {
+        // public function xwcpos_curl_img_upload($curl_handle, $r, $url)
+        // {
 
-            if (isset($r['headers']['wc-img-id'])) {
+        //     if (isset($r['headers']['wc-img-id'])) {
 
-                $wc_img_prod_id = (int) $r['headers']['wc-img-id'];
+        //         $wc_img_prod_id = (int) $r['headers']['wc-img-id'];
 
-                $file_path = get_attached_file($wc_img_prod_id);
+        //         $file_path = get_attached_file($wc_img_prod_id);
 
-                $img_meta_data = wp_get_attachment_metadata($wc_img_prod_id);
-                $thumb = false;
-                if (isset($img_meta_data['sizes']['shop_single'])) {
-                    $thumb = $img_meta_data['sizes']['shop_single']['file'];
-                } else if (isset($img_meta_data['sizes']['shop_catalog'])) {
-                    $thumb = $img_meta_data['sizes']['shop_catalog']['file'];
-                } else if (isset($img_meta_data['sizes']['thumbnail'])) {
-                    $thumb = $img_meta_data['sizes']['thumbnail']['file'];
-                }
+        //         $img_meta_data = wp_get_attachment_metadata($wc_img_prod_id);
+        //         $thumb = false;
+        //         if (isset($img_meta_data['sizes']['shop_single'])) {
+        //             $thumb = $img_meta_data['sizes']['shop_single']['file'];
+        //         } else if (isset($img_meta_data['sizes']['shop_catalog'])) {
+        //             $thumb = $img_meta_data['sizes']['shop_catalog']['file'];
+        //         } else if (isset($img_meta_data['sizes']['thumbnail'])) {
+        //             $thumb = $img_meta_data['sizes']['thumbnail']['file'];
+        //         }
 
-                $file_path = $thumb ? str_replace(basename($file_path), $thumb, $file_path) : $file_path;
+        //         $file_path = $thumb ? str_replace(basename($file_path), $thumb, $file_path) : $file_path;
 
-                $img_file = apply_filters('xwcpos_sync_to_ls_img_path', $file_path);
+        //         $img_file = apply_filters('xwcpos_sync_to_ls_img_path', $file_path);
 
-                if (false !== $img_file) {
+        //         if (false !== $img_file) {
 
-                    $matrix_id = isset($r['headers']['matrix-id']) ? (int) $r['headers']['matrix-id'] : false;
-                    $matrix_id_xml = $matrix_id > 0 ? '<itemMatrixID>' . $matrix_id . '</itemMatrixID>' : '';
+        //             $matrix_id = isset($r['headers']['matrix-id']) ? (int) $r['headers']['matrix-id'] : false;
+        //             $matrix_id_xml = $matrix_id > 0 ? '<itemMatrixID>' . $matrix_id . '</itemMatrixID>' : '';
 
-                    $body = array(
-                        "data" => "<Image><filename>" . basename($img_file) . "</filename>" . $matrix_id_xml . "</Image>",
-                        "image" => new CURLFile($img_file, mime_content_type($img_file), basename($img_file)),
-                    );
+        //             $body = array(
+        //                 "data" => "<Image><filename>" . basename($img_file) . "</filename>" . $matrix_id_xml . "</Image>",
+        //                 "image" => new CURLFile($img_file, mime_content_type($img_file), basename($img_file)),
+        //             );
 
-                    unset($r['headers']['Content-Length']);
-                    unset($r['headers']['wc-img-id']);
-                    unset($r['headers']['matrix-id']);
+        //             unset($r['headers']['Content-Length']);
+        //             unset($r['headers']['wc-img-id']);
+        //             unset($r['headers']['matrix-id']);
 
-                    $headers = array();
-                    foreach ($r['headers'] as $name => $value) {
-                        $headers[] = "{$name}: $value";
-                    }
+        //             $headers = array();
+        //             foreach ($r['headers'] as $name => $value) {
+        //                 $headers[] = "{$name}: $value";
+        //             }
 
-                    curl_setopt($curl_handle, CURLOPT_HTTPHEADER, $headers);
-                    curl_setopt($curl_handle, CURLOPT_POSTFIELDS, $body);
-                }
-            }
-        }
+        //             curl_setopt($curl_handle, CURLOPT_HTTPHEADER, $headers);
+        //             curl_setopt($curl_handle, CURLOPT_POSTFIELDS, $body);
+        //         }
+        //     }
+        // }
 
         public function get_product_data_by_id($wc_prod_id)
         {
@@ -2372,7 +2372,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
             $inventory = null;
 
-            $shopData = get_option('xwcpos_site_data');
+            $siteID = get_option('xwcpos_site_id');
 
             global $wpdb;
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
@@ -2382,11 +2382,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             if ($xwcpos_product->wc_prod_id > 0 && !$skip_wc_stock) {
                 $inventory = (int) get_post_meta($xwcpos_product->wc_product_id, '_stock', true);
             } elseif (!is_null($results)) {
-                if (!empty($shopData)) {
-                    $shop_id = $shopData['xwcpos_store_data'][0]->id;
-
+                if (!empty($siteID)) {
                     foreach ($results as $item_shop) {
-                        if ($item_shop->shop_id == $shop_id) {
+                        if ($item_shop->shop_id == $siteID) {
                             $inventory = (int) $item_shop->qoh;
                             break;
                         }
@@ -2402,41 +2400,41 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 $inventory = 0;
             }
 
-            $inventory = apply_filters('xwcpos_get_kounta_inventory', $inventory, $xwcpos_product);
+            //$inventory = apply_filters('xwcpos_get_kounta_inventory', $inventory, $xwcpos_product);
 
             return $inventory;
         }
 
-        public function update_data_via_api($xwcpos_product)
-        {
-          //get product data via API. Triggered when an item is in the cart at checkout.
+        // public function update_data_via_api($xwcpos_product)
+        // {
+        //   //get product data via API. Triggered when an item is in the cart at checkout.
 
-            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+        //     $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
 
-            // $api_data = $this->xwcpos_product_api_path($xwcpos_product);
-            $endpoint = 'companies/' . $xwcpos_account_id . '/products/' . $xwcpos_product->product_ls_id;
+        //     // $api_data = $this->xwcpos_product_api_path($xwcpos_product);
+        //     $endpoint = 'companies/' . $xwcpos_account_id . '/products/' . $xwcpos_product->product_ls_id;
 
-            $result = $this->xwcpos_make_api_call($endpoint, 'Read', $api_data['search_data']);
+        //     $result = $this->xwcpos_make_api_call($endpoint, 'Read', $api_data['search_data']);
 
-            if (is_wp_error($result)) {
-                return $result;
-            }
+        //     if (is_wp_error($result)) {
+        //         return $result;
+        //     }
 
-            if (isset($xwcpos_product->product_ls_id) && $xwcpos_product->product_ls_id > 0) {
-                $new_data_api_item = $result;
-            } 
-            else {
-                echo esc_html__('Error: invalid Kounta Product.', 'xwcpos');
-            }
+        //     if (isset($xwcpos_product->product_ls_id) && $xwcpos_product->product_ls_id > 0) {
+        //         $new_data_api_item = $result;
+        //     } 
+        //     else {
+        //         echo esc_html__('Error: invalid Kounta Product.', 'xwcpos');
+        //     }
 
-            $new_data_api_item->xwcpos_import_date = $xwcpos_product->product_last_import;
-            $new_data_api_item->xwcpos_last_sync_date = $xwcpos_product->product_last_sync;
-            $new_data_api_item->xwcpos_is_synced = $xwcpos_product->product_is_synced;
-            $new_data_api_item->wc_prod_id = $xwcpos_product->wc_product_id;
+        //     $new_data_api_item->xwcpos_import_date = $xwcpos_product->product_last_import;
+        //     $new_data_api_item->xwcpos_last_sync_date = $xwcpos_product->product_last_sync;
+        //     $new_data_api_item->xwcpos_is_synced = $xwcpos_product->product_is_synced;
+        //     $new_data_api_item->wc_prod_id = $xwcpos_product->wc_product_id;
 
-            //$this->update_product_via_api($xwcpos_product);
-            return $xwcpos_product->item_id;
-        }
+        //     //$this->update_product_via_api($xwcpos_product);
+        //     return $xwcpos_product->item_id;
+        // }
 
         // public function xwcpos_product_api_path($xwcpos_product)
         // {
@@ -2828,6 +2826,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $mysql_args = array(
                'qoh' => isset($site->stock) ? $site->stock : null,
             );
+
+            // if(!($site->stock >= 0) && !($site->stock <= 0)){
+            //   $this->plugin_log('ERROR: Item stock error. Item:'.$old_item->xwcpos_item_id.' Stock:'.$site->stock);
+            // } else{
+            //   $this->plugin_log('SUCCESS: Item has a valid stock value. Item:'.$old_item->xwcpos_item_id.' Stock:'.$site->stock);
+            // }
 
             $where_args['xwcpos_item_id'] = $old_item->xwcpos_item_id;
             $where_args['shop_id'] = $site->id;
