@@ -1949,8 +1949,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $total += $payment['amount'];
           }
 
+          $total_lte = $total+0.05;
+          $total_gte = $total-0.05;
+
+
           if(isset($order_data['sale_number'])){
-            $orders = $this->xwcpos_make_api_call($endpoint, 'Read','created_gte='.$yesterday.'&created_lte='.$tomorrow.'&value_gte='.$total.'&value_lte='.$total);
+            $orders = $this->xwcpos_make_api_call($endpoint, 'Read','created_gte='.$yesterday.'&created_lte='.$tomorrow.'&value_gte='.$total_gte.'&value_lte='.$total_lte);
             foreach($orders as $order){
               if(str_starts_with($order->sale_number, $order_data['sale_number'])) return $order;
               //if($order->sale_number == $saleNum) return $order;
