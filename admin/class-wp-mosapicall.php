@@ -111,7 +111,6 @@ class WP_MOSAPICall
         } else {
             $control_url .= '.' . $emitter;
         }
-
         if (is_array($data) && count($data) > 0) {
             $body = json_encode($data);
         } elseif (is_string($data)) {
@@ -127,9 +126,47 @@ class WP_MOSAPICall
         return self::_makeCall($curl, $control_url, $body);
     }
 
+    public static function plugin_log( $entry, $mode = 'a', $file = 'brewhq-kounta-apicalls' ) {
+        // Get WordPress uploads directory.
+        $upload_dir = wp_upload_dir();
+        $upload_dir = $upload_dir['basedir'];
+
+        // If the entry is array, json_encode.
+        if ( is_array( $entry ) ) {
+            $entry = json_encode( $entry );
+        }
+
+        // Write the log file.
+        $file  = $upload_dir . '/' . $file . '.log';
+        $file  = fopen( $file, $mode );
+        $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" );
+        fclose( $file );
+
+        return $bytes;
+    }
+
     protected static function _makeCall($curl, $url, $body)
     {
-        $result = $curl->call($url, $body);
+        self::plugin_log("//");
+        self::plugin_log("//");
+        self::plugin_log("/***** START API CALL *****/");
+        self::plugin_log("URL: ".$url);
+        $requestBody = "No request body";
+        if($body) $requestBody = $body;
+        self::plugin_log("Body: ".$requestBody);
+
+        $raw_response = $curl->call($url, $body);
+        $result = wp_remote_retrieve_body($raw_response);
+        try {
+            self::plugin_log("/* Raw Response */");
+            self::plugin_log($raw_response);
+            self::plugin_log("Response Code: ".wp_remote_retrieve_response_code($raw_response));
+            self::plugin_log("Response Message: ".wp_remote_retrieve_response_message($raw_response));
+            self::plugin_log("/* Response Body */");
+            self::plugin_log($result);
+        } catch (Exception $e) {
+            throw new Exception('MerchantOS API Call Error: ' . $e->getMessage() . ', Response: ' . $result);
+        }
 
         try {
             $return = json_decode($result);
@@ -152,6 +189,8 @@ class WP_MOSAPICall
         //         throw new Exception('MerchantOS API Call Error: Could not parse XML, Response: ' . $result);
         //     }
         // }
+
+        self::plugin_log("/***** End API Call *****/");
 
         return $return;
     }

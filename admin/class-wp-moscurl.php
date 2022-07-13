@@ -317,7 +317,7 @@ class WP_MOScURL
             throw new Exception($raw_response->get_error_message(), $code);
         }
 
-        return wp_remote_retrieve_body($raw_response);
+        return $raw_response;
     }
 
     /**
