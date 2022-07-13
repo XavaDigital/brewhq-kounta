@@ -83,7 +83,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-wp-mosapicall.php';
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-wp-moscurl.php';
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-xwcpos-admin.php';
-           
+
             add_action('wp_ajax_xwcposImpCats', array($this, 'xwcposImpCats'));
             add_action('wp_ajax_xwcposImpProds', array($this, 'xwcposImpProds'));
             add_action('wp_ajax_xwcposSyncAllProds', array($this, 'xwcposSyncAllProds'));
@@ -93,59 +93,64 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
             //Schedule product sync function with WP CRON
             add_action('xwcposSyncAll_hook', array($this, 'xwcposSyncAllProdsCRON'));
-            if ( ! wp_next_scheduled( 'xwcposSyncAll_hook' ) ) {
-              wp_schedule_event( time(), 'hourly', 'xwcposSyncAll_hook' );
-            }
+
+            register_activation_hook( __FILE__, array($this, 'schedule_CRON') );
 
             //add_action('http_api_curl', array($this, 'xwcpos_curl_img_upload'), 10, 3);
-            
+
             /**
              * TODO
-             * 
+             *
              * Display kounta order synced on orders admin table
              * Send order again button on Order actions. Update if already synced, add if not. https://www.skyverge.com/blog/add-woocommerce-custom-order-actions/
              * Enforce the show_online attribute from Kounta
              * Update customer when order sent if exist
-             * Product min/max/increment 
+             * Product min/max/increment
              * If top_seller, add tag
              * If 'special_item' add special price?
              * Select site from list
-             * 
+             *
              * Implement webhooks for:
              * Order status change
              * Low stock levels
              * Customer data update
-             * 
+             *
              */
-            
-            add_action('woocommerce_payment_complete', array($this, 'xwcpos_add_order_to_kounta'), 9999);
-            
+
+            add_action('woocommerce_thankyou', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            //add_action('woocommerce_order_status_completed', array($this, 'xwcpos_add_order_to_kounta'), 9999);
             add_action('woocommerce_order_status_on-hold', array($this, 'xwcpos_add_order_to_kounta'), 9999);
 
             add_action( 'init', array($this, 'script_enqueuer') );
-            
-            /* Check cart items for current stock levels */
-           // add_action('woocommerce_before_checkout_process', array($this, 'xwcpos_update_inventory_checkout'));
-           //add_action('woocommerce_check_cart_items', array($this, 'xwcpos_update_inventory_checkout'));
 
-           add_action( 'wp_footer', array($this, 'xwcpos_add_jscript_checkout_and_cart'), 9999 );
+            /* Check cart items for current stock levels */
+            // add_action('woocommerce_before_checkout_process', array($this, 'xwcpos_update_inventory_checkout'));
+            //add_action('woocommerce_check_cart_items', array($this, 'xwcpos_update_inventory_checkout'));
+
+            add_action( 'woocommerce_before_cart', array($this, 'xwcpos_add_jscript_checkout_and_cart'), 9999 );
         }
 
-        
+        public function schedule_CRON() {
+            if ( ! wp_next_scheduled( 'xwcposSyncAll_hook' ) ) {
+                wp_schedule_event( time(), 'hourly', 'xwcposSyncAll_hook' );
+            }
+        }
+
+
 
         public function script_enqueuer() {
-      
-          wp_register_script( "xwcpos_ajax", plugin_dir_url(__FILE__).'/assets/js/xwcpos_ajax.js', array('jquery') );
-          wp_localize_script( 'xwcpos_ajax', 'myAjax', array( 'ajaxurl' => admin_url( 'admin-ajax.php' )));
-          wp_enqueue_script( 'jquery' );
-          wp_enqueue_script( 'xwcpos_ajax' ); 
+
+            wp_register_script( "xwcpos_ajax", plugin_dir_url(__FILE__).'/assets/js/xwcpos_ajax.js', array('jquery') );
+            wp_localize_script( 'xwcpos_ajax', 'myAjax', array( 'ajaxurl' => admin_url( 'admin-ajax.php' )));
+            wp_enqueue_script( 'jquery' );
+            wp_enqueue_script( 'xwcpos_ajax' );
         }
 
         public function xwcpos_add_jscript_checkout_and_cart() {
-          global $wp;
-          if ( is_checkout() || is_cart() ) {
-             echo 
-             '<script>
+            global $wp;
+            if ( is_checkout() || is_cart() ) {
+                echo
+                '<script>
               jQuery(document).ready(function(){
                   //alert("done");
                   jQuery.ajax({
@@ -155,13 +160,13 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     data : {action: "xwcposCheckCart"},
                     success: function(response) {
                       
-                        if(response.type == "success") {
+                        if(response == "success") {
                           //jQuery("#like_counter").html(response.like_count);
                           //alert("Like added");
                         }
                         else {
                           //alert(response.message);
-                          jQuery(".woocommerce-notices-wrapper").html("<ul class=\"woocommerce-error\" role=\"alert\"><li>Sorry, we do not have sufficient stock of Another No SKU. Please update your cart and try again.</li></ul>");
+                          jQuery(".woocommerce-notices-wrapper").html("<ul class=\"woocommerce-error\" role=\"alert\"><li>Sorry, we do not have sufficient stock of Another No SKU. Please update your cart and try again.</li></ul>")
                         }
                     }
                   })
@@ -200,42 +205,42 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                   // });
                 });
             </script>';
-          }
-       }
-
-       public function xwcposCheckCart()
-       {
-        $result['type'] = "success";
-        $messages = $this->xwcpos_update_inventory_checkout();
-
-        if($messages != ""){
-          $result['type'] = "error";
-          $result['message'] = $messages;
-        };
-
-        
-        echo $result;
-        die();
-       }
-
-       public function xwcposSyncOrder(){
-         //delete existing Kounta Order ID for testing purposes
-        //update_post_meta( $_REQUEST["order_id"], '_kounta_id', '' );
-        $order_id = $_REQUEST["order_id"];
-        $response = $this->xwcpos_manual_add_order_to_kounta($order_id);
-        
-
-        if($response['success']){
-          $result['success'] = true;
-          $result['message'] = "Kounta Order ID: ".$response['order_id'];
-        } else if($response['error']){
-          $result['error'] = "Error: ".$response['error_type'];
-          $result['message'] = $response['error_description'];
+            }
         }
-        $result = json_encode($result);
-        echo $result;
-        die();
-       }
+
+        public function xwcposCheckCart()
+        {
+            $result['type'] = "success";
+            $messages = $this->xwcpos_update_inventory_checkout();
+
+            if($messages != ""){
+                $result['type'] = "error";
+                $result['message'] = $messages;
+            };
+
+
+            echo $result;
+            die();
+        }
+
+        public function xwcposSyncOrder(){
+            //delete existing Kounta Order ID for testing purposes
+            //update_post_meta( $_REQUEST["order_id"], '_kounta_id', '' );
+            $order_id = $_REQUEST["order_id"];
+            $response = $this->xwcpos_manual_add_order_to_kounta($order_id);
+
+
+            if($response['success']){
+                $result['success'] = true;
+                $result['message'] = "Kounta Order ID: ".$response['order_id'];
+            } else if($response['error']){
+                $result['error'] = "Error: ".$response['error_type'];
+                $result['message'] = $response['error_description'];
+            }
+            $result = json_encode($result);
+            echo $result;
+            die();
+        }
 
         public function xwcpos_init()
         {
@@ -262,23 +267,23 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         }
 
-        public function plugin_log( $entry, $mode = 'a', $file = 'brewhq-kounta' ) { 
-          // Get WordPress uploads directory.
-          $upload_dir = wp_upload_dir();
-          $upload_dir = $upload_dir['basedir'];
-      
-          // If the entry is array, json_encode.
-          if ( is_array( $entry ) ) { 
-            $entry = json_encode( $entry ); 
-          } 
-      
-          // Write the log file.
-          $file  = $upload_dir . '/' . $file . '.log';
-          $file  = fopen( $file, $mode );
-          $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" ); 
-          fclose( $file ); 
-      
-          return $bytes;
+        public function plugin_log( $entry, $mode = 'a', $file = 'brewhq-kounta' ) {
+            // Get WordPress uploads directory.
+            $upload_dir = wp_upload_dir();
+            $upload_dir = $upload_dir['basedir'];
+
+            // If the entry is array, json_encode.
+            if ( is_array( $entry ) ) {
+                $entry = json_encode( $entry );
+            }
+
+            // Write the log file.
+            $file  = $upload_dir . '/' . $file . '.log';
+            $file  = fopen( $file, $mode );
+            $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" );
+            fclose( $file );
+
+            return $bytes;
         }
 
         public function xwcpos_mod_tables()
@@ -419,19 +424,19 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
             // if ($wpdb->get_var("SHOW TABLES LIKE '$wpdb->xwcpos_item_attributes'") != $wpdb->xwcpos_item_attributes) {
             //     $sql6 = "CREATE TABLE " . $wpdb->xwcpos_item_attributes . " (
-						// 	id int(25) NOT NULL auto_increment,
-						// 	item_attribute_set_id         varchar(255) NULL,
-						// 	name                          varchar(255) NULL,
-						// 	attribute_name_1              varchar(255) NULL,
-						// 	attribute_name_2              varchar(255) NULL,
-						// 	attribute_name_3              varchar(255) NULL,
-						// 	system                        varchar(255) NULL,
-						// 	archived                      varchar(255) NULL,
-				    //   updated_at                    timestamp,
-						// 	created_at                    timestamp,
+            // 	id int(25) NOT NULL auto_increment,
+            // 	item_attribute_set_id         varchar(255) NULL,
+            // 	name                          varchar(255) NULL,
+            // 	attribute_name_1              varchar(255) NULL,
+            // 	attribute_name_2              varchar(255) NULL,
+            // 	attribute_name_3              varchar(255) NULL,
+            // 	system                        varchar(255) NULL,
+            // 	archived                      varchar(255) NULL,
+            //   updated_at                    timestamp,
+            // 	created_at                    timestamp,
 
-						// 	PRIMARY KEY (id)
-						// 	) $charset_collate;";
+            // 	PRIMARY KEY (id)
+            // 	) $charset_collate;";
 
             //     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
             //     dbDelta($sql6);
@@ -439,21 +444,21 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
             // if ($wpdb->get_var("SHOW TABLES LIKE '$wpdb->xwcpos_item_ecomm'") != $wpdb->xwcpos_item_ecomm) {
             //     $sql7 = "CREATE TABLE " . $wpdb->xwcpos_item_ecomm . " (
-						// 	id int(25) NOT NULL auto_increment,
-						// 	xwcpos_item_id                varchar(255) NULL,
-						// 	item_e_commerce_id            varchar(255) NULL,
-						// 	long_description              text,
-						// 	short_description             text,
-						// 	weight varchar(255)           NULL,
-						// 	width varchar(255)            NULL,
-						// 	height varchar(255)           NULL,
-						// 	length varchar(255)           NULL,
-						// 	list_on_store varchar(255)    NULL,
-				    //   updated_at                    timestamp,
-						// 	created_at                    timestamp,
+            // 	id int(25) NOT NULL auto_increment,
+            // 	xwcpos_item_id                varchar(255) NULL,
+            // 	item_e_commerce_id            varchar(255) NULL,
+            // 	long_description              text,
+            // 	short_description             text,
+            // 	weight varchar(255)           NULL,
+            // 	width varchar(255)            NULL,
+            // 	height varchar(255)           NULL,
+            // 	length varchar(255)           NULL,
+            // 	list_on_store varchar(255)    NULL,
+            //   updated_at                    timestamp,
+            // 	created_at                    timestamp,
 
-						// 	PRIMARY KEY (id)
-						// 	) $charset_collate;";
+            // 	PRIMARY KEY (id)
+            // 	) $charset_collate;";
 
             //     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
             //     dbDelta($sql7);
@@ -510,12 +515,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
 
             $xwcpos_res = $wpdb->get_row("SELECT COUNT(*) as total FROM " . $wpdb->xwcpos_item_categories . " WHERE cat_id = " . $k_cat->id);
-            
+
             if ($xwcpos_res->total == 0) {
                 //insert row
-                
+
                 $fields = array(
-                  '%d', '%d', '%s', '%s', '%s', '%d', '%s','%s'
+                    '%d', '%d', '%s', '%s', '%s', '%d', '%s','%s'
                 );
 
                 $args = array(
@@ -533,7 +538,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 return $result;
 
             } else {
-              //do nothing
+                //do nothing
             }
 
         }
@@ -550,7 +555,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         public function xwcpos_make_api_call($controlname, $action, $query_str = '', $data = array(), $unique_id = null, Closure $callback = null)
         {
-          $this->plugin_log('Making API call. '.$controlname.' Query:'.$query_str);
+            //$this->plugin_log('Making API call. '.$controlname.' Query:'.$query_str);
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $xwcpos_token = esc_attr(get_option('xwcpos_access_token'));
             $client_id = esc_attr(get_option('xwcpos_client_id'));
@@ -571,7 +576,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $result = $MOSAPI->makeAPICall($controlname, $action, $unique_id, $data, $query_str, $callback);
 
             if (isset($result->httpCode) && $result->httpCode != '200') {
-                
+
             }
             return $result;
         }
@@ -588,11 +593,11 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 foreach ($xwcpos_categories as $xwcpos_cat) {
 
                     // If category previously inserted
-                    if (property_exists($xwcpos_cat, 'wc_cat_id') && $xwcpos_cat->wc_cat_id > 0) {            
-                      //if it still exists
-                      if(get_term($xwcpos_cat->wc_cat_id)){
-                        continue;
-                      }
+                    if (property_exists($xwcpos_cat, 'wc_cat_id') && $xwcpos_cat->wc_cat_id > 0) {
+                        //if it still exists
+                        if(get_term($xwcpos_cat->wc_cat_id)){
+                            continue;
+                        }
                     }
 
                     $slug = sanitize_title_with_dashes(str_replace('/', '-', $xwcpos_cat->name));
@@ -620,22 +625,22 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         {
             $items = $this->xwcpos_fetch_simple_items();
             $inventory = $this->get_kounta_inventory();
-  
+
             if (isset($items->error)) {
-              if($items->error == 'Limit exceeded'){
-                echo json_encode(
-                  array(
-                      'err' => esc_html__("API limited exceeded. Please wait and try again later", "xwcpos"),
-                  )
-                );
-              }else{
-                echo json_encode(
-                  array(
-                      'err' => esc_html__($items . " Invalid access token. Please check API connection with Kounta POS.", "xwcpos"),
-                  )
-                );
-              }
-              exit();
+                if($items->error == 'Limit exceeded'){
+                    echo json_encode(
+                        array(
+                            'err' => esc_html__("API limited exceeded. Please wait and try again later", "xwcpos"),
+                        )
+                    );
+                }else{
+                    echo json_encode(
+                        array(
+                            'err' => esc_html__($items . " Invalid access token. Please check API connection with Kounta POS.", "xwcpos"),
+                        )
+                    );
+                }
+                exit();
             }
 
             // Add items to database
@@ -671,167 +676,175 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         public function xwcposSyncAllProdsCRON(){
-          $this->plugin_log('/**** CRON Process initiated: Sync all ****/ ');
-          $this->xwcposSyncAllProds();
+            $this->plugin_log('/**** CRON Process initiated: Sync all ****/ ');
+            // $to      = 'david@xavadigital.com';
+            // $subject = 'BrewHQ Inventory CRON';
+            // $message = 'The inventory CRON has executed';
+            // $headers = 'From: webmaster@brewhq.co.nz'       . "\r\n" .
+            //             'Reply-To: webmaster@brewhq.co.nz' . "\r\n" .
+            //             'X-Mailer: PHP/' . phpversion();
+
+            // mail($to, $subject, $message, $headers);
+            $this->xwcposSyncAllProds();
         }
 
         public function xwcposSyncAllProds()
         {
-          //get inventory from Kounta and update database
-          $this->sync_inventory();
+            //get inventory from Kounta and update database
+            $this->sync_inventory();
 
-          //sync wc_product quantity with kounta database
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $site_id = get_option('xwcpos_site_id');
-          
-        
-          $this->plugin_log('/**** Process initiated: Sync all ****/ ');
-          global $wpdb;
-          $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-          //get products with oldest sync date
-          $xwcpos_items = $wpdb->get_results("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE xwcpos_last_sync_date > 0 ORDER BY xwcpos_last_sync_date ASC");
-          $this->plugin_log('Products found: '.count( $xwcpos_items));
-          $percent = ceil(count( $xwcpos_items) / 100) * 100;
-          $checked_count = 0;
-          $count = 0;
-          $lapsed_count = 0;
-          $refresh_time = 300;//seconds
+            //sync wc_product quantity with kounta database
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $site_id = get_option('xwcpos_site_id');
 
-          foreach($xwcpos_items as $item){
-            $time = time();
-            $date = new DateTime($item->xwcpos_last_sync_date, new DateTimeZone('Pacific/Auckland'));
-            
-            $last_sync = intval($date->format('U'));
-            $lapsed = time() - $last_sync;
-            //$this->plugin_log('Product ID:'.$item->id .' Lapsed: '.$lapsed);
 
-            //if($item->wc_prod_id != null){
-              if($item->wc_prod_id != null && $lapsed > $refresh_time){
+            $this->plugin_log('/**** Process initiated: Sync all ****/ ');
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+            //get products with oldest sync date
+            $xwcpos_items = $wpdb->get_results("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE xwcpos_last_sync_date > 0 ORDER BY xwcpos_last_sync_date ASC");
+            $this->plugin_log('Products found: '.count( $xwcpos_items));
+            $percent = ceil(count( $xwcpos_items) / 100) * 100;
+            $checked_count = 0;
+            $count = 0;
+            $lapsed_count = 0;
+            $refresh_time = 300;//seconds
 
-              //if($item->wc_prod_id == 4630){
-              $checked_count++;
-              $result = $this->xwcpos_fetch_item_inventory($item->wc_prod_id);
-              //get item price from Kounta
-              $k_product = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products/'.$item->item_id, 'Read', '');
-              $site_index = array_search($site_id, array_column($k_product->sites, 'id'));
-              if($site_index !== null){
-                $prod_data = $k_product->sites[$site_index];
-                if($prod_data){
-                  $old_item = (object)[];
-                  $old_item->product_id = $item->id;
-                  $old_item->wc_prod_id = $item->wc_prod_id;
-                  $old_item->xwcpos_item_id = $item->id;
-  
-                  $site = (object)[];
-                  $site = $prod_data;
-  
-                  $current_price = floatval($this->xwcpos_item_price_check($site, $old_item));
-                  $kounta_price = $prod_data->unit_price;
-  
-                  if($current_price !== $kounta_price){
-                    //if price is different
-                    $this->xwcpos_update_item_price($site, $old_item);
-                    $this->xwcpos_update_item_prices($k_product, $old_item);
-                  }
+            foreach($xwcpos_items as $item){
+                $time = time();
+                $date = new DateTime($item->xwcpos_last_sync_date, new DateTimeZone('Pacific/Auckland'));
+
+                $last_sync = intval($date->format('U'));
+                $lapsed = time() - $last_sync;
+                //$this->plugin_log('Product ID:'.$item->id .' Lapsed: '.$lapsed);
+
+                //if($item->wc_prod_id != null){
+                if($item->wc_prod_id != null && $lapsed > $refresh_time){
+
+                    //if($item->wc_prod_id == 4630){
+                    $checked_count++;
+                    $result = $this->xwcpos_fetch_item_inventory($item->wc_prod_id);
+                    //get item price from Kounta
+                    $k_product = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products/'.$item->item_id, 'Read', '');
+                    $site_index = array_search($site_id, array_column($k_product->sites, 'id'));
+                    if($site_index !== null){
+                        $prod_data = $k_product->sites[$site_index];
+                        if($prod_data){
+                            $old_item = (object)[];
+                            $old_item->product_id = $item->id;
+                            $old_item->wc_prod_id = $item->wc_prod_id;
+                            $old_item->xwcpos_item_id = $item->id;
+
+                            $site = (object)[];
+                            $site = $prod_data;
+
+                            $current_price = floatval($this->xwcpos_item_price_check($site, $old_item));
+                            $kounta_price = $prod_data->unit_price;
+
+                            if($current_price !== $kounta_price){
+                                //if price is different
+                                $this->xwcpos_update_item_price($site, $old_item);
+                                $this->xwcpos_update_item_prices($k_product, $old_item);
+                            }
+                        }
+                    }
+
+                    if($result)
+                        $count++;
+                    //$this->plugin_log('Product updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Result: '.$result);
+                    //usleep(250000);
                 }
-              }
-
-              if($result) 
-              $count++;
-              //$this->plugin_log('Product updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Result: '.$result);
-              //usleep(250000);
-           }
-            if($lapsed < $refresh_time){
-              //$this->plugin_log('Product not updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Lapsed: '.$lapsed);
-              $lapsed_count++;
+                if($lapsed < $refresh_time){
+                    //$this->plugin_log('Product not updated. ID:'.$item->id . ' Last sync date: '.$item->xwcpos_last_sync_date . ' Is_synced: '.$item->xwcpos_is_synced .' Lapsed: '.$lapsed);
+                    $lapsed_count++;
+                }
             }
-          }
 
-          $this->plugin_log('Products updated recently: '.$lapsed_count);
-          $this->plugin_log('Products sync attempted: '.$checked_count);
-          $this->plugin_log('Products sync successful: '.$count);
-          
-          $this->plugin_log('/**** Process completed: Sync all ****/ ');
+            $this->plugin_log('Products updated recently: '.$lapsed_count);
+            $this->plugin_log('Products sync attempted: '.$checked_count);
+            $this->plugin_log('Products sync successful: '.$count);
 
-          echo json_encode(
-            array(
-                'percent' => $percent,
-                'count' => $count . esc_html__(" Products Synced Successfully!", "xwcpos"),
-            )
-          );
-          die();
+            $this->plugin_log('/**** Process completed: Sync all ****/ ');
+
+            echo json_encode(
+                array(
+                    'percent' => $percent,
+                    'count' => $count . esc_html__(" Products Synced Successfully!", "xwcpos"),
+                )
+            );
+            die();
         }
 
         public function sync_inventory(){
-          $inventory = $this->get_kounta_inventory();
-          global $wpdb;
-          $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-          $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
-            
-          $site_id = get_option('xwcpos_site_id');
-          $site = (object)[];
-          $old_item = (object)[];
+            $inventory = $this->get_kounta_inventory();
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+            $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
 
-          foreach($inventory as $item){
-            //get item with kounta id
-            $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id = $item->id");
-            if($result){
-              $old_item->xwcpos_item_id = $result;      
-              $site->id = $site_id;
-              $site->stock = $item->stock;
-              //$site->stock = 72;
+            $site_id = get_option('xwcpos_site_id');
+            $site = (object)[];
+            $old_item = (object)[];
 
-              $this->xwcpos_update_item_shop($site, $old_item );
+            foreach($inventory as $item){
+                //get item with kounta id
+                $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id = $item->id");
+                if($result){
+                    $old_item->xwcpos_item_id = $result;
+                    $site->id = $site_id;
+                    $site->stock = $item->stock;
+                    //$site->stock = 72;
+
+                    $this->xwcpos_update_item_shop($site, $old_item );
+                }
             }
-          }
         }
 
         public function get_kounta_inventory(){
-          $this->plugin_log('Started getting inventory');
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $this->plugin_log('Started getting inventory');
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $products = array();
             $products_remaining = true;
             $last_product_id = false;
             $site_id = get_option('xwcpos_site_id');
 
             while($products_remaining){
-              if(!$last_product_id){
-                $paging = "";
-              } else {
-                $paging = 'start='.$last_product_id;
-              }
-
-              $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/sites/'.$site_id.'/inventory', 'Read', $paging);
-              
-              if($new_products !== "Limit exceeded"){
-                if($new_products !== null && !isset($new_products->error)){
-                  $products = array_merge($products, $new_products);
-                  $last_product_id = end($products)->id;
-                }
-                // } else if (isset($new_products->error)){
-                //   return $new_products;
-                // }
-                
-                if(isset($new_products)){
-                  $count = count($new_products);
-                    if($count < 100){
-                      $products_remaining = false;
-                    }
-                  // $page++;
+                if(!$last_product_id){
+                    $paging = "";
                 } else {
-                  $products_remaining = false;
+                    $paging = 'start='.$last_product_id;
                 }
-              } else {
-                $this->plugin_log('API limit exceeded while getting inventory');
-              
-                $products_remaining = false;
-                //$return['error'] = "Limit exceeded";
-                // if(count($products)>0){
 
-                // }
-                return $products;
-              }
-              
+                $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/sites/'.$site_id.'/inventory', 'Read', $paging);
+
+                if($new_products !== "Limit exceeded"){
+                    if($new_products !== null && $new_products !== "" && !isset($new_products->error)){
+                        $products = array_merge($products, $new_products);
+                        $last_product_id = end($products)->id;
+                    }
+                    // } else if (isset($new_products->error)){
+                    //   return $new_products;
+                    // }
+
+                    if(isset($new_products) && $new_products !== ""){
+                        $count = count($new_products);
+                        if($count < 100){
+                            $products_remaining = false;
+                        }
+                        // $page++;
+                    } else {
+                        $products_remaining = false;
+                    }
+                } else {
+                    $this->plugin_log('API limit exceeded while getting inventory');
+
+                    $products_remaining = false;
+                    //$return['error'] = "Limit exceeded";
+                    // if(count($products)>0){
+
+                    // }
+                    return $products;
+                }
+
             }
 
             return $products;
@@ -840,10 +853,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         public function xwcpos_fetch_simple_items()
         {
-          
+
 
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-            
+
             // global $wpdb;
             // $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
             // $xwcpos_categories = $wpdb->get_results("SELECT * FROM " . $wpdb->xwcpos_item_categories);
@@ -855,50 +868,51 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             //   if(!isset($new_products->error)){
             //     $products = array_merge($products, $new_products);
             //   }
-              
+
             // }
 
             // return $products;
 
             //"https://api.kounta.com/v1/companies/27154/products.json?page=2"
-            
+
 
             $products = array();
             $products_remaining = true;
             $page = 1;
 
             while($products_remaining){
-              $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products', 'Read', 'page='.$page);
-              
-              if($new_products !== "Limit exceeded"){
-                if($new_products !== null && !isset($new_products->error)){
-                  $products = array_merge($products, $new_products);
-                } else if (isset($new_products->error)){
-                  return $new_products;
-                }
-                
-                if(isset($new_products)){
-                  $count = count($new_products);
-                    if($count < 100){
-                      $products_remaining = false;
+                $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products', 'Read', 'page='.$page);
+
+                if($new_products !== "Limit exceeded"){
+                    if($new_products !== null && !isset($new_products->error)){
+                        $products = array_merge($products, $new_products);
+                    } else if (isset($new_products->error)){
+                        return $new_products;
                     }
-                  $page++;
+
+                    if(isset($new_products)){
+                        $count = count($new_products);
+                        if($count < 100){
+                            $products_remaining = false;
+                        }
+                        $page++;
+                    } else {
+                        $products_remaining = false;
+                    }
                 } else {
-                  $products_remaining = false;
+                    $products_remaining = false;
+                    $return = array();
+                    $return->error = "Limit exceeded";
+                    return $return;
                 }
-              } else {
-                $products_remaining = false;
-                $return->error = "Limit exceeded";
-                return $return;
-              }
-              
+
             }
 
 
             return $products;
 
             //return $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products', 'Read');
-  
+
             wp_die();
         }
 
@@ -936,7 +950,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             // $wpdb->xwcpos_item_ecomm = $wpdb->prefix . 'xwcpos_item_ecomm';
 
             if ($item->name == "" || $item->name == null){
-              return;
+                return;
             }
 
             // Chceck if item in products table already
@@ -955,34 +969,34 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $stock = $inventory[$inv]->stock;
 
             if($fullitem){
-              //collect product data for adding to database
-              $mysql_args = $this->xwcpos_get_item_database_entries($fullitem);
+                //collect product data for adding to database
+                $mysql_args = $this->xwcpos_get_item_database_entries($fullitem);
 
-              //insert into database
-              $wpdb->insert($wpdb->xwcpos_items, $mysql_args, '');
+                //insert into database
+                $wpdb->insert($wpdb->xwcpos_items, $mysql_args, '');
 
-              //the id of the record just added
-              $xwcpos_last_insert_id = $wpdb->insert_id;
+                //the id of the record just added
+                $xwcpos_last_insert_id = $wpdb->insert_id;
 
-              //Insert shop items
-              $shops = $this->xwcpos_add_shops_item($fullitem, $xwcpos_last_insert_id, $stock);
-              //Item Prices
-              $prices = $this->xwcpos_add_item_prices($fullitem, $xwcpos_last_insert_id);
+                //Insert shop items
+                $shops = $this->xwcpos_add_shops_item($fullitem, $xwcpos_last_insert_id, $stock);
+                //Item Prices
+                $prices = $this->xwcpos_add_item_prices($fullitem, $xwcpos_last_insert_id);
 
-              if(!$shops || !$prices){
-                //delete the item because something went wrong
-                $wpdb->delete( $wpdb->xwcpos_items, " WHERE id = $xwcpos_last_insert_id" );
-                if($shops){
-                  $wpdb->delete( $wpdb->xwcpos_item_shops, " WHERE id = $xwcpos_last_insert_id" );
+                if(!$shops || !$prices){
+                    //delete the item because something went wrong
+                    $wpdb->delete( $wpdb->xwcpos_items, " WHERE id = $xwcpos_last_insert_id" );
+                    if($shops){
+                        $wpdb->delete( $wpdb->xwcpos_item_shops, " WHERE id = $xwcpos_last_insert_id" );
+                    }
+                    if($prices){
+                        $wpdb->delete( $wpdb->xwcpos_item_prices, " WHERE id = $xwcpos_last_insert_id" );
+                    }
+                    return;
+
                 }
-                if($prices){
-                  $wpdb->delete( $wpdb->xwcpos_item_prices, " WHERE id = $xwcpos_last_insert_id" );
-                }
-                return;
-                
-              }
 
-              return $xwcpos_last_insert_id;
+                return $xwcpos_last_insert_id;
             }
 
             die();
@@ -1006,9 +1020,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
             $result = 0;
             if (empty($item_id)) {
-              $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id IS NULL");
+                $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id IS NULL");
             } else if ($item_id > 0) {
-              $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id = $item_id");
+                $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id = $item_id");
             }
             return $result;
 
@@ -1037,7 +1051,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 }
             }
 
-           // echo 'the item id: ' . $item->unit_of_measure . $item->measure;
+            // echo 'the item id: ' . $item->unit_of_measure . $item->measure;
 
             $fields = array(
                 '%d', '%s', '%s', '%s', '%s', '%d',
@@ -1116,18 +1130,18 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             //add sites data to table
 
             if (!isset($item->sites)){
-              return false;
+                return false;
             }
             else if (is_array($item->sites)) {
-              $success = false;
+                $success = false;
                 foreach ($item->sites as $item_shop) {
-                  $item_shop->stock = $stock;
+                    $item_shop->stock = $stock;
                     $res = $this->xwcpos_insert_shop_item($item->id, $item_shop, $xwcpos_last_insert_id);
                     if($res){
-                      $success = true;
+                        $success = true;
                     }
                 }
-              return $success;
+                return $success;
             }
 
             return false;
@@ -1163,7 +1177,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 $success = false;
                 $res = $this->xwcpos_insert_item_price($item->sites[0], $xwcpos_last_insert_id);
                 if($res){
-                  $success = true;
+                    $success = true;
                 }
                 return $success;
             }
@@ -1305,7 +1319,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
 
         //     if ($result == '401') {
-  
+
         //       echo json_encode(
         //           array(
         //               'err' => esc_html__($result . "Connection with Kounta POS API is lost, please connect it first."),
@@ -1315,7 +1329,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         //     } else {
         //       $this->xwcpos_process_images_upload($result->Item, $wc_product);
         //     }
-           
+
 
         //     $this->xwcpos_map_woocommerce_product_with_ls($result->Item, $wc_product->get_id());
 
@@ -1722,7 +1736,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             // $wpdb->xwcpos_item_attributes = $wpdb->prefix . 'xwcpos_item_attributes';
 
             $result = $wpdb->get_row($wpdb->prepare(
-              "SELECT *,
+                "SELECT *,
                 item.id AS product_id,
                 item.item_id AS product_ls_id,
                 item.name AS product_name,
@@ -1778,145 +1792,154 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         public function xwcpos_manual_add_order_to_kounta($order_id){
-          $order=wc_get_order($order_id); 
-          $order->add_order_note( 'Manual order sync initialised.');
-          return $this->xwcpos_add_order_to_kounta($order_id);
+            $order=wc_get_order($order_id);
+            $order->add_order_note( 'Manual order sync initialised.');
+            return $this->xwcpos_add_order_to_kounta($order_id);
         }
 
         public function xwcpos_add_order_to_kounta($order_id){
-          $order=wc_get_order($order_id); 
-          $kounta_id = $order->get_meta('_kounta_id');
+            $order=wc_get_order($order_id);
+            $kounta_id = $order->get_meta('_kounta_id');
 
-          if($kounta_id == null){
-         //if(true){
-            $order->add_order_note( 'Starting upload of Kounta order');
-            //find customer
-            $customerID = $this->get_kounta_customer($order);
+            if($kounta_id == null){
+                //if(true){
+                $order->add_order_note( 'Starting upload of Kounta order');
+                //find customer
+                $customerID = $this->get_kounta_customer($order);
 
-            //collate order item data
-            $order_items = array();
-            foreach($order->get_items() as $item){
-              $order_items[] = $this->individual_item_data_for_upload($item);
-            }
+                //collate order item data
+                $order_items = array();
+                foreach($order->get_items() as $item){
+                    $order_items[] = $this->individual_item_data_for_upload($item);
+                }
 
-            //add shipping cost as line item
-            if($order->get_shipping_total()){
-              $order_items[] = array(
-              'product_id' => intval(get_option('xwcpos_shipping_product_id')),
-              'quantity' => 1,
-              'unit_price' => floatval($order->get_shipping_total())
-            );
-            }
-            
+                //add shipping cost as line item
+                if($order->get_shipping_total()){
+                    $order_items[] = array(
+                        'product_id' => intval(get_option('xwcpos_shipping_product_id')),
+                        'quantity' => 1,
+                        'unit_price' => floatval($order->get_shipping_total())
+                    );
+                }
 
 
-            // collate payment method data
-            $payment_data = array($this->get_payment_method_for_upload($order));
 
-            $site_id = get_option('xwcpos_site_id');
-          
-            //collate all order data for upload
-            $order_data = array();
-            $order_data['status'] = 'SUBMITTED';
-            $order_data['sale_number'] = strval($order->id);
-            $order_data['order_type'] = 'Delivery';
-            $order_data['customer_id'] = $customerID;   
-            $order_data['site_id'] = intval($site_id);
-            $order_data['lines'] = $order_items;
-            $order_data['payments'] = $payment_data;
-            $order_data['complete_when_paid'] = false;
-            $order_data['pass_thru_printing'] = false;
-            $order_data['placed_at'] = $order->get_date_created()->format('Y-m-d\Th:i:s\Z');
+                // collate payment method data
+                $payment_data = array($this->get_payment_method_for_upload($order));
 
-            $tries = 1;
-            $max_tries = 1;
-            while ($tries <= $max_tries) {
-              //Send to Kounta
-              //$order->add_order_note( 'Try:'.$tries);
-              try{
-                $result = $this->upload_order_to_kounta($order_data);
-              } catch (Exception $e) {
-                $order->add_order_note( 'Caught exception: '.$e->getMessage()."\n");
-                break;
-              }
+                $site_id = get_option('xwcpos_site_id');
 
-              //If successful, add metadata and notes to order
-              if(isset($result) && $result !== false && $result !== "" && !isset($result['error'])){
-                update_post_meta( $order_id, '_kounta_id', $result );
-                $order->add_order_note( 'Order uploaded to Kounta. Order#:'.$result);
-                $response['success'] = true;
-                $response['order_id'] = $result;
-                break;
-              } elseif(isset($result['error'])){
-                $order->add_order_note( 'Order failed to upload to Kounta. '.$result['error'].' '.$result['error_description'].'Order data: '.json_encode($order_data));
+                //collate all order data for upload
+                $order_data = array();
+                $order_data['status'] = 'SUBMITTED';
+                $order_data['sale_number'] = strval($order->get_id());
+                $order_data['order_type'] = 'Delivery';
+                $order_data['customer_id'] = $customerID;
+                $order_data['site_id'] = intval($site_id);
+                $order_data['lines'] = $order_items;
+                $order_data['payments'] = $payment_data;
+                $order_data['complete_when_paid'] = false;
+                $order_data['pass_thru_printing'] = false;
+                $order_data['placed_at'] = $order->get_date_created()->format('Y-m-d\Th:i:s\Z');
+
+                $tries = 1;
+                $max_tries = 1;
+                while ($tries <= $max_tries) {
+                    //Send to Kounta
+                    //$order->add_order_note( 'Try:'.$tries);
+                    try{
+                        $result = $this->upload_order_to_kounta($order_data);
+                    } catch (Exception $e) {
+                        $order->add_order_note( 'Caught exception: '.$e->getMessage()."\n");
+                        break;
+                    }
+
+                    //If successful, add metadata and notes to order
+                    if(isset($result) && $result !== false && $result !== "" && !isset($result['error'])){
+                        update_post_meta( $order_id, '_kounta_id', $result );
+                        $order->add_order_note( 'Order uploaded to Kounta. Order#:'.$result);
+                        $response['success'] = true;
+                        $response['order_id'] = $result;
+                        break;
+                    } elseif(isset($result['error'])){
+                        $order->add_order_note( 'Order failed to upload to Kounta. '.$result['error'].' '.$result['error_description'].'Order data: '.json_encode($order_data));
+                        $response['error'] = true;
+                        $response['error_type'] = $result['error'];
+                        $response['error_description'] = $result['error_description'];
+                        $tries += 1;
+                    } else{
+                        $order->add_order_note( 'Order failed to upload to Kounta with no error message.'.json_encode($order_data));
+                        $tries += 1;
+                    }
+
+                    if($tries > $max_tries){
+                        $order->add_order_note( 'All attempts failed. Email sent to David.');
+                        $this->send_admin_error_email($order_id, $order_data);
+                        //$order->add_order_note( 'Order data: '.json_encode($order_data));
+                    }
+                }
+
+
+            } else {
+                $order->add_order_note( 'Upload attempted. Order already exists. Order#:'.$kounta_id);
                 $response['error'] = true;
-                $response['error_type'] = $result['error'];
-                $response['error_description'] = $result['error_description'];
-                $tries += 1;
-              } else{
-                $order->add_order_note( 'Order failed to upload to Kounta with no error message.'.json_encode($order_data));
-                $tries += 1;
-              } 
-
-              if($tries > $max_tries){
-                $order->add_order_note( 'All attempts failed. Email sent to David.');
-                $this->send_admin_error_email($order_id, $order_data);
-                //$order->add_order_note( 'Order data: '.json_encode($order_data));
-              }
+                $response['error_type'] = 'Order already exists. '.$kounta_id;
+                $response['error_description'] = 'This order already has a Kounta order ID';
             }
-            
-        
-          } else {
-            $order->add_order_note( 'Upload attempted. Order already exists. Order#:'.$kounta_id);
-            $response['error'] = true;
-            $response['error_type'] = 'Order already exists. '.$kounta_id;
-            $response['error_description'] = 'This order already has a Kounta order ID';
-          }  
-          return $response;
+            return $response;
         }
 
         public function send_admin_error_email($order_id, $order_data){
-          $to      = 'david@xavadigital.com';
-          $subject = 'BrewHQ Order Upload Error';
-          $message = 'An order has failed to sync to Kounta. Order#: '.$order_id.'<br/>'.$order_data;
-          $headers = 'From: webmaster@brewhq.co.nz'       . "\r\n" .
-                      'Reply-To: webmaster@brewhq.co.nz' . "\r\n" .
-                      'X-Mailer: PHP/' . phpversion();
 
-          mail($to, $subject, $message, $headers);
+            $to      = 'david@xavadigital.com';
+            $subject = 'BrewHQ Order Upload Error';
+            $message = 'An order has failed to sync to Kounta. Order#: '.$order_id.'<br/>'.json_encode($order_data);
+            $headers = 'From: webmaster@brewhq.co.nz'       . "\r\n" .
+                'Reply-To: webmaster@brewhq.co.nz' . "\r\n" .
+                'X-Mailer: PHP/' . phpversion();
+
+            mail($to, $subject, $message, $headers);
         }
 
         public function upload_order_to_kounta($order_data){
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $endpoint = 'companies/' . $xwcpos_account_id . '/orders';
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $endpoint = 'companies/' . $xwcpos_account_id . '/orders';
 
-          $order = $this->get_order_by_sale_number($order_data);
-          if($order == false){
+            try{
+                $order = $this->get_order_by_sale_number($order_data);
 
-            $result = $this->xwcpos_make_api_call($endpoint, 'Create','', json_encode($order_data));
-            
-            //check that the follow triggers if order upload successful.
-            //maybe if result == null, elseif isset(result->error), else return false
-            if($result == null){
-              $order = $this->get_order_by_sale_number($order_data);
-              if($order !== false){
-                return $order->id;
-              } else {
-                $return['error'] = "Order upload failed order check";
-                $return['error_description'] = "Order does not appear to be present";
-                return $return;
-              }
-              
-            
-            } elseif(isset($result->error)) {
-              $return['error'] = $result->error;
-              $return['error_description'] = $result->error_message;
-              return $return;
-            } else{
-              return false;
+                if($order == false){
+
+                    $result = $this->xwcpos_make_api_call($endpoint, 'Create','', json_encode($order_data));
+
+                    //check that the follow triggers if order upload successful.
+                    if($result == null){
+                        //short delay to avoid false positive of the following check
+                        usleep(250000);
+                        $order = $this->get_order_by_sale_number($order_data);
+                        // TODO possibly add multiple order upload attempts if check returns false
+                        if($order !== false){
+                            return $order->id;
+                        } else {
+                            $return['error'] = "Order upload failed order check";
+                            $return['error_description'] = "Order does not appear to be present";
+                            return $return;
+                        }
+                    } elseif(isset($result->error)) {
+                        $return['error'] = $result->error;
+                        $return['error_description'] = $result->error_message;
+                        return $return;
+                    } else{
+                        return false;
+                    }
+                } else return $order->id;
+            } catch (Exception $e) {
+                return $this->upload_order_to_kounta($order_data);
+                //$e->getMessage();
             }
-          } else return $order->id;
-          
+            return false;
+
+
         }
 
         // public function update_order_on_kounta($order_data, $kounta_id){
@@ -1924,7 +1947,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         //   $endpoint = 'companies/' . $xwcpos_account_id . '/orders/'. $kounta_id;
 
         //   $result = $this->xwcpos_make_api_call($endpoint, 'Update','', json_encode($order_data));
-          
+
         //   if($result == null){
         //     return true;
         //   } elseif(isset($result->error)) {
@@ -1934,141 +1957,151 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         // }
 
         public function get_order_by_sale_number($order_data){
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $endpoint = 'companies/' . $xwcpos_account_id . '/orders';
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $endpoint = 'companies/' . $xwcpos_account_id . '/orders';
 
-          $order_date = new DateTime($order_data['placed_at']);
-          $order_date->modify('+1 day');
-          $tomorrow = $order_date->format('Y-m-d');
-          $order_date->modify('-2 day');
-          $yesterday = $order_date->format('Y-m-d');
+            $order_date = new DateTime($order_data['placed_at']);
+            $order_date->modify('+1 day');
+            $tomorrow = $order_date->format('Y-m-d');
+            $order_date->modify('-2 day');
+            $yesterday = $order_date->format('Y-m-d');
 
-          $total = 0;
+            $total = 0;
 
-          foreach($order_data['payments'] as $payment){
-            $total += $payment['amount'];
-          }
-
-          $total_lte = $total+0.05;
-          $total_gte = $total-0.05;
-
-
-          if(isset($order_data['sale_number'])){
-            $orders = $this->xwcpos_make_api_call($endpoint, 'Read','created_gte='.$yesterday.'&created_lte='.$tomorrow.'&value_gte='.$total_gte.'&value_lte='.$total_lte);
-            foreach($orders as $order){
-              if(str_starts_with($order->sale_number, $order_data['sale_number'])) return $order;
-              //if($order->sale_number == $saleNum) return $order;
+            foreach($order_data['payments'] as $payment){
+                $total += $payment['amount'];
             }
-          }
-          return false;
+
+            $total_lte = $total+0.05;
+            $total_gte = $total-0.05;
+
+
+            if(isset($order_data['sale_number'])){
+                $orders = $this->xwcpos_make_api_call($endpoint, 'Read','created_gte='.$yesterday.'&created_lte='.$tomorrow.'&value_gte='.$total_gte.'&value_lte='.$total_lte);
+                if($orders && is_array($orders) && count($orders) > 0){
+                    foreach($orders as $order){
+                        if(str_starts_with($order->sale_number, $order_data['sale_number'])) return $order;
+                        //if($order->sale_number == $saleNum) return $order;
+                    }
+                }
+            }
+            return false;
         }
 
         public function individual_item_data_for_upload($item)
         {
-          $product_id = $item->get_product_id();
-          $data = array();
-          $data['product_id'] = intval(get_post_meta($product_id, '_xwcpos_item_id', true ));
-          $data['quantity'] = $item->get_quantity();
-          $data['unit_price'] = floatval($item->get_total())/$item->get_quantity();
+            $product_id = $item->get_product_id();
+            $data = array();
+            $data['product_id'] = intval(get_post_meta($product_id, '_xwcpos_item_id', true ));
+            $data['quantity'] = $item->get_quantity();
+            $data['unit_price'] = floatval($item->get_total())/$item->get_quantity();
 
-          return $data;
+            return $data;
         }
 
         public function get_payment_method_for_upload($order)
         {
-          $xwcpos_payment_gateways = json_decode(get_option('xwcpos_payment_gateways'), true);
-          $wc_method = $order->get_payment_method();
-          $payment_data = array();
-          $payment_data['method_id'] = intval($xwcpos_payment_gateways[$wc_method]['kounta_pm']);
-          $payment_data['amount'] = floatval($order->calculate_totals());
-          $payment_data['ref'] = $order->get_transaction_id() ? $order->get_transaction_id() : $order->get_order_number();
+            $xwcpos_payment_gateways = json_decode(get_option('xwcpos_payment_gateways'), true);
+            $wc_method = $order->get_payment_method();
+            $payment_data = array();
+            $payment_data['method_id'] = intval($xwcpos_payment_gateways[$wc_method]['kounta_pm']);
+            $payment_data['amount'] = floatval($order->calculate_totals());
+            $payment_data['ref'] = $order->get_transaction_id() ? $order->get_transaction_id() : $order->get_order_number();
 
-          return $payment_data;
+            return $payment_data;
         }
 
         public function get_kounta_customer($order)
         {
 
-          $customerDetails = array(
-            "first_name" => $order->get_billing_first_name(),
-            "last_name" => $order->get_billing_last_name(),
-            "email" => $order->get_billing_email(),
-            "phone" => $order->get_billing_phone(),
-            'primary_address' => array(
-              'address' => $order->get_billing_address_1() . ', ' . $order->get_billing_address_2(),
-              'city' => $order->get_billing_city(),
-              'state' => $order->get_billing_state(),
-              'postal_code' => $order->get_billing_postcode(),
-              'country' => $order->get_billing_country()
-            ),
-            'shipping_address' => array(
-              'address' => $order->get_shipping_address_1() && $order->get_shipping_address_2()? $order->get_shipping_address_1() . ', ' . $order->get_shipping_address_2(): $order->get_billing_address_1() . ', ' . $order->get_billing_address_2(),
-              'city' => $order->get_shipping_city()? $order->get_shipping_city(): $order->get_billing_city(),
-              'state' => $order->get_shipping_state()?  $order->get_shipping_state():  $order->get_billing_state(),
-              'postal_code' => $order->get_shipping_postcode()? $order->get_shipping_postcode(): $order->get_billing_postcode(),
-              'country' => $order->get_shipping_country()? $order->get_shipping_country():$order->get_billing_country()
-            )
-          );
+            $customerDetails = array(
+                "first_name" => $order->get_billing_first_name(),
+                "last_name" => $order->get_billing_last_name(),
+                "email" => $order->get_billing_email(),
+                "phone" => $order->get_billing_phone(),
+                'primary_address' => array(
+                    'address' => $order->get_billing_address_1() . ', ' . $order->get_billing_address_2(),
+                    'city' => $order->get_billing_city(),
+                    'state' => $order->get_billing_state(),
+                    'postal_code' => $order->get_billing_postcode(),
+                    'country' => $order->get_billing_country()
+                ),
+                'shipping_address' => array(
+                    'address' => $order->get_shipping_address_1() && $order->get_shipping_address_2()? $order->get_shipping_address_1() . ', ' . $order->get_shipping_address_2(): $order->get_billing_address_1() . ', ' . $order->get_billing_address_2(),
+                    'city' => $order->get_shipping_city()? $order->get_shipping_city(): $order->get_billing_city(),
+                    'state' => $order->get_shipping_state()?  $order->get_shipping_state():  $order->get_billing_state(),
+                    'postal_code' => $order->get_shipping_postcode()? $order->get_shipping_postcode(): $order->get_billing_postcode(),
+                    'country' => $order->get_shipping_country()? $order->get_shipping_country():$order->get_billing_country()
+                )
+            );
 
-          $customerID = '';
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
-          
-          if(isset($customerDetails['email'])){
-            $customerID = $this->get_customer_by_email($customerDetails['email']);
-          }
+            $customerID = '';
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
 
-          if(!$customerID){
-            $customerID = $this->get_customer_by_details($customerDetails);
-          }
-
-          //if customer not found, create customer
-          if(!$result || isset($result->error)){
-            $result = $this->xwcpos_make_api_call($endpoint, 'Create','', $customerDetails);
-            if(!isset($result->error)){
-              $customerID = $this->get_customer_by_email($customerDetails['email']);
+            if(isset($customerDetails['email'])){
+                $result = $this->get_customer_by_email($customerDetails['email']);
+                if($result){
+                    $customerID = $result;
+                }
+                //log message
             }
-          }
 
-          return $customerID;
+            if(!$customerID){
+                $result = $this->get_customer_by_details($customerDetails);
+                if($result){
+                    $customerID = $result;
+                }
+                //log message
+            }
+
+            //if customer not found, create customer
+            if(!$customerID) {
+                $result = $this->xwcpos_make_api_call($endpoint, 'Create', '', $customerDetails);
+                if (!isset($result->error)) {
+                    $customerID = $this->get_customer_by_email($customerDetails['email']);
+                } else {
+                    //log $result->error, $result->error_description and user details
+                }
+            }
+
+            return $customerID;
         }
 
         public function get_customer_by_email($email)
         {
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
-          $customerID = '';
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
+            $customerID = '';
 
-          $result = $this->xwcpos_make_api_call($endpoint, 'Read', 'email='.$email);
-          if($result->id){
-            $customerID = $result->id;
-          }
-          
-          return $customerID;
+            $result = $this->xwcpos_make_api_call($endpoint, 'Read', 'email='.$email);
+            if($result && !$result->error && $result->id){
+                $customerID = $result->id;
+            }
+
+            return $customerID;
         }
 
         public function get_customer_by_details($customerDetails)
         {
-          $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
-          $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
-          $customerID = '';
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
+            $customerID = '';
 
-          $fname = $customerDetails['first_name'];
-          $lname = $customerDetails['last_name'];
-          $phone = $customerDetails['phone'];
+            $fname = $customerDetails['first_name'];
+            $lname = $customerDetails['last_name'];
+            $phone = $customerDetails['phone'];
 
-          if(isset($phone) && isset($fname) && isset($lname)){
-            $query_str = 'first_name='.$fname.'&last_name='.$lname.'&phone='.$phone;
-            $result = $this->xwcpos_make_api_call($endpoint, 'Read', $query_str);
-          }
+            if(isset($phone) && isset($fname) && isset($lname)){
+                $query_str = 'first_name='.$fname.'&last_name='.$lname.'&phone='.$phone;
+                $result = $this->xwcpos_make_api_call($endpoint, 'Read', $query_str);
+                if($result && $result->id){
+                    $customerID = $result->id;
+                }
+            }
 
-          if($result->id){
-            $customerID = $result->id;
-          }
-
-          return $customerID;
+            return $customerID;
         }
-
 
         public function xwcpos_create_new_item_shop($item_shop_id, $shop_id, $stock)
         {
@@ -2115,200 +2148,285 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         public function xwcpos_update_inventory_checkout()
         {
 
-          global $wpdb;
-          $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-          $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
-          $site_id = get_option('xwcpos_site_id');
-          $site = (object)[];
-          $old_item = (object)[];
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+            $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
+            $site_id = get_option('xwcpos_site_id');
+            $site = (object)[];
+            $old_item = (object)[];
 
-          $full_message = "";
+            $full_message = "";
 
 
-          $cart_data = WC()->cart->cart_contents;
-          if (empty($cart_data)) {
-            return;
-          }
-          //$this->sync_inventory();
-          $inventory = $this->get_kounta_inventory();
-          
-
-          foreach ($cart_data as $item_data) {
-            //check cart items against retrieved Kounta inventory
-            $data_id = $item_data['variation_id'] > 0 ? $item_data['variation_id'] : $item_data['product_id'];
-            $this->xwcpos_fetch_item_inventory($data_id);
-            $product = wc_get_product($data_id);
-            $k_prod_id = get_post_meta($data_id, '_xwcpos_item_id', true );
-            $k_stock_id = array_search($k_prod_id, array_column($inventory, 'id'));
-            $k_stock = $inventory[$k_stock_id]->stock;
-
-            if($k_stock < $item_data['quantity'] ){
-              $msg = sprintf(
-                  esc_html__('Sorry, we do not have sufficient stock of %s. Please update your cart and try again.', 'xwcpos'),
-                  get_the_title($data_id)
-              );
-
-              $full_message .= $msg;
-
-              wc_add_notice($msg, 'error'); 
+            $cart_data = WC()->cart->cart_contents;
+            if (empty($cart_data)) {
+                return;
             }
 
-            if($k_stock !== $item_data['quantity'] ){
-              //update stock
-
-              $item = $inventory[$k_stock_id];
-
-              //get item with kounta id
-              $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id =". $item->id);
-              $old_item->xwcpos_item_id = $result;
-
-              if($result){
-                $site->id = $site_id;
-                $site->stock = $item->stock;
-                //$site->stock = 72;
-
-                $this->xwcpos_update_item_shop($site, $old_item );
-              }
+            $cart_products = array();
+            foreach ($cart_data as $item_data) {
+                $data_id = $item_data['variation_id'] > 0 ? $item_data['variation_id'] : $item_data['product_id'];
+                $k_prod_id = get_post_meta($data_id, '_xwcpos_item_id', true );
+                array_push($cart_products,$k_prod_id);
             }
-          }
-          return $full_message;
+
+            //$this->sync_inventory();
+            $inventory = $this->get_cart_products_kounta_inventory($cart_products);
+
+            if(count($inventory) > 0){
+                foreach ($cart_data as $item_data) {
+                    //check cart items against retrieved Kounta inventory
+                    $data_id = $item_data['variation_id'] > 0 ? $item_data['variation_id'] : $item_data['product_id'];
+                    $k_prod_id = get_post_meta($data_id, '_xwcpos_item_id', true );
+                    $k_stock_id = array_search($k_prod_id, array_column($inventory, 'id'));
+                    $k_stock = $inventory[$k_stock_id]->stock;
+
+                    if($k_stock && $k_stock < $item_data['quantity'] ){
+                        $msg = sprintf(
+                            esc_html__('Sorry, we do not have sufficient stock of %s. Please update your cart and try again.', 'xwcpos'),
+                            get_the_title($data_id)
+                        );
+
+                        $full_message .= $msg;
+
+                        wc_add_notice($msg, 'error');
+                    }
+
+                    if($k_stock && $k_stock !== $item_data['quantity'] ){
+                        //update stock
+
+                        $item = $inventory[$k_stock_id];
+
+                        //get item with kounta id
+                        $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id =". $item->id);
+                        $old_item->xwcpos_item_id = $result;
+
+                        if($result){
+                            $site->id = $site_id;
+                            $site->stock = $item->stock;
+                            //$site->stock = 72;
+
+                            $this->xwcpos_update_item_shop($site, $old_item );
+                        }
+                    }
+                }
+            }
+            return $full_message;
+        }
+
+        public function get_cart_products_kounta_inventory($cart_products){
+            $this->plugin_log('Started getting inventory');
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+            $inventory = array();
+            $site_id = get_option('xwcpos_site_id');
+
+            foreach ($cart_products as $cart_item) {
+                $page = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/sites/'.$site_id.'/inventory', 'Read',  $paging = 'start='.($cart_item-1));
+                if($page[0]->id == $cart_item){
+                    array_push($inventory, $page[0]);
+                }
+            }
+            return $inventory;
+        }
+
+        public function xwcpos_update_all_inventory_checkout()
+        {
+
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+            $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
+            $site_id = get_option('xwcpos_site_id');
+            $site = (object)[];
+            $old_item = (object)[];
+
+            $full_message = "";
+
+
+            $cart_data = WC()->cart->cart_contents;
+            if (empty($cart_data)) {
+                return;
+            }
+            //$this->sync_inventory();
+            $inventory = $this->get_kounta_inventory();
+
+            if(count($inventory) > 0){
+                foreach ($cart_data as $item_data) {
+                    //check cart items against retrieved Kounta inventory
+                    $data_id = $item_data['variation_id'] > 0 ? $item_data['variation_id'] : $item_data['product_id'];
+                    $this->xwcpos_fetch_item_inventory($data_id);
+                    $product = wc_get_product($data_id);
+                    $k_prod_id = get_post_meta($data_id, '_xwcpos_item_id', true );
+                    $k_stock_id = array_search($k_prod_id, array_column($inventory, 'id'));
+                    $k_stock = $inventory[$k_stock_id]->stock;
+
+                    if($k_stock && $k_stock < $item_data['quantity'] ){
+                        $msg = sprintf(
+                            esc_html__('Sorry, we do not have sufficient stock of %s. Please update your cart and try again.', 'xwcpos'),
+                            get_the_title($data_id)
+                        );
+
+                        $full_message .= $msg;
+
+                        wc_add_notice($msg, 'error');
+                    }
+
+                    if($k_stock && $k_stock !== $item_data['quantity'] ){
+                        //update stock
+
+                        $item = $inventory[$k_stock_id];
+
+                        //get item with kounta id
+                        $result = $wpdb->get_var("SELECT * FROM " . $wpdb->xwcpos_items . " WHERE item_id =". $item->id);
+                        $old_item->xwcpos_item_id = $result;
+
+                        if($result){
+                            $site->id = $site_id;
+                            $site->stock = $item->stock;
+                            //$site->stock = 72;
+
+                            $this->xwcpos_update_item_shop($site, $old_item );
+                        }
+                    }
+                }
+            }
+            return $full_message;
         }
 
         public function xwcpos_fetch_item_inventory($wc_product_id)
         {
-          //Get the product data from the Kounta item database tables
-          $xwcpos_product = $this->get_product_data_by_id($wc_product_id);
+            //Get the product data from the Kounta item database tables
+            $xwcpos_product = $this->get_product_data_by_id($wc_product_id);
 
-          if($wc_product_id != null){
+            if($wc_product_id != null){
 
-            $product = wc_get_product($wc_product_id);
-            if($product){
-              if($product->get_status() != 'trash'){
-                //the product exists and is not trashed
-                //If the product is not set to sync, just escape
-                $wcp_post_meta = get_post_meta($wc_product_id, '_xwcpos_sync', true);
-                if (!$wcp_post_meta ) {
-                    return false;
-                }
-              } else {
-                if($product->get_status() == 'trash'){
-                  $result = $this->update_item_disassociate($xwcpos_product);
-                } else {
-                  //the product doesn't exist
-                  //search for a product with a matching SKU
-                  $product_id = wc_get_product_id_by_sku($xwcpos_product->sku);
-                  $product = wc_get_product($product_id);
-                  if($product && $product->get_status() != 'trash'){
-                    $result = $this->update_item_wc_prod_id($xwcpos_product, $product);
-                    $update = update_post_meta($product, '_xwcpos_item_id', $xwcpos_product->product_id);
-                    if ($xwcpos_product->product_is_synced){
-                      $update = update_post_meta($product, '_xwcpos_sync', 1);
+                $product = wc_get_product($wc_product_id);
+                if($product){
+                    if($product->get_status() != 'trash'){
+                        //the product exists and is not trashed
+                        //If the product is not set to sync, just escape
+                        $wcp_post_meta = get_post_meta($wc_product_id, '_xwcpos_sync', true);
+                        if (!$wcp_post_meta ) {
+                            return false;
+                        }
+                    } else {
+                        if($product->get_status() == 'trash'){
+                            $result = $this->update_item_disassociate($xwcpos_product);
+                        } else {
+                            //the product doesn't exist
+                            //search for a product with a matching SKU
+                            $product_id = wc_get_product_id_by_sku($xwcpos_product->sku);
+                            $product = wc_get_product($product_id);
+                            if($product && $product->get_status() != 'trash'){
+                                $result = $this->update_item_wc_prod_id($xwcpos_product, $product);
+                                $update = update_post_meta($product, '_xwcpos_item_id', $xwcpos_product->product_id);
+                                if ($xwcpos_product->product_is_synced){
+                                    $update = update_post_meta($product, '_xwcpos_sync', 1);
+                                }
+                                $xwcpos_product = $this->get_product_data_by_id($product);
+                            } else {
+                                //disassociate the kounta product with any WC products
+                                $result = $this->update_item_disassociate($xwcpos_product);
+                            }
+                        }
                     }
-                    $xwcpos_product = $this->get_product_data_by_id($product);
-                  } else {
-                    //disassociate the kounta product with any WC products
-                    $result = $this->update_item_disassociate($xwcpos_product);
-                  }
+
+
+
+                    //if the product has an equivalent in Kounta
+                    if ($xwcpos_product->product_ls_id > 0) {
+
+                        // //Get the product data from the API too
+                        // $result = $this->update_data_via_api($xwcpos_product);
+                        $this->update_item_sync_date($xwcpos_product);
+
+                        // //if no error
+                        // if (is_wp_error($result)) {
+                        //     $error_msg = __(
+                        //         'Warning: there is a error with syncing the inventory of this product.',
+                        //         'xwcpos'
+                        //     );
+                        //     $error_msg .= $result->get_error_message();
+
+                        //     wc_add_notice(
+                        //         apply_filters('xwcpos_inventory_sync_error', $error_msg),
+                        //         'error'
+                        //     );
+                        //     return false;
+
+                        // } else {
+                        //set the stock level in WC
+                        $this->set_wc_prod_stock($xwcpos_product);
+                        return true;
+
+                        // }
+
+                    } else {
+                        return false;
+                    }
                 }
-              }
-              
-            
-
-            //if the product has an equivalent in Kounta
-            if ($xwcpos_product->product_ls_id > 0) {
-
-                // //Get the product data from the API too
-                // $result = $this->update_data_via_api($xwcpos_product);
-                $this->update_item_sync_date($xwcpos_product);
-
-                // //if no error
-                // if (is_wp_error($result)) {
-                //     $error_msg = __(
-                //         'Warning: there is a error with syncing the inventory of this product.',
-                //         'xwcpos'
-                //     );
-                //     $error_msg .= $result->get_error_message();
-
-                //     wc_add_notice(
-                //         apply_filters('xwcpos_inventory_sync_error', $error_msg),
-                //         'error'
-                //     );
-                //     return false;
-
-                // } else {
-                //set the stock level in WC
-                    $this->set_wc_prod_stock($xwcpos_product);
-                    return true;
-
-                // }
-
-            } else {
-              return false;
             }
-          }
-        }
 
         }
 
         public function update_item_sync_date($xwcpos_product){
-          
-          global $wpdb;
-          $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
 
-          $wc_prod_id = $xwcpos_product->wc_prod_id;
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
 
-          $old_item = $this->get_product_data_by_id($wc_prod_id);
-          $new_item = $old_item;
-          $new_item->xwcpos_last_sync_date = current_time('mysql');
+            $wc_prod_id = $xwcpos_product->wc_prod_id;
 
-          $mysql_args = $this->xwcpos_get_item_database_entries($new_item);
-          if( isset($mysql_args['item_id'])){
-            $mysql_args['item_id'] = $old_item->item_id;
-            $mysql_args['categories'] = $old_item->categories;
-            $mysql_args['tags'] = $old_item->tags;
-            $where_args['id'] = isset($old_item) && isset($old_item->product_id) ? $old_item->product_id : '';
+            $old_item = $this->get_product_data_by_id($wc_prod_id);
+            $new_item = $old_item;
+            $new_item->xwcpos_last_sync_date = current_time('mysql');
 
-          //   $unset_fields = array(
-          //     'created_at',
-          //     'wc_prod_id',
-          //     'xwcpos_import_date',
-          //     'xwcpos_is_synced',
-          // );
+            $mysql_args = $this->xwcpos_get_item_database_entries($new_item);
+            if( isset($mysql_args['item_id'])){
+                $mysql_args['item_id'] = $old_item->item_id;
+                $mysql_args['categories'] = $old_item->categories;
+                $mysql_args['tags'] = $old_item->tags;
+                $where_args['id'] = isset($old_item) && isset($old_item->product_id) ? $old_item->product_id : '';
 
-            // foreach ($unset_fields as $field) {
-            //     if (array_key_exists($field, $mysql_args)) {
-            //         unset($mysql_args[$field]);
-            //     }
-            // }
+                //   $unset_fields = array(
+                //     'created_at',
+                //     'wc_prod_id',
+                //     'xwcpos_import_date',
+                //     'xwcpos_is_synced',
+                // );
 
-            $where_field = array('%d');
-            $update_fields = array(
-              '%d', '%s', '%s', '%s', '%s', '%d',
-              '%s', '%d', '%s', '%s', '%d', '%d',
-              '%s', '%s', '%s', '%s', '%s', '%s',
-              '%s', '%s', '%s', '%d'
-            );
+                // foreach ($unset_fields as $field) {
+                //     if (array_key_exists($field, $mysql_args)) {
+                //         unset($mysql_args[$field]);
+                //     }
+                // }
 
-            $result = $wpdb->update($wpdb->xwcpos_items, $mysql_args, $where_args, $update_fields, $where_field);
-          }
+                $where_field = array('%d');
+                $update_fields = array(
+                    '%d', '%s', '%s', '%s', '%s', '%d',
+                    '%s', '%d', '%s', '%s', '%d', '%d',
+                    '%s', '%s', '%s', '%s', '%s', '%s',
+                    '%s', '%s', '%s', '%d'
+                );
+
+                $result = $wpdb->update($wpdb->xwcpos_items, $mysql_args, $where_args, $update_fields, $where_field);
+            }
 
         }
 
         public function update_item_wc_prod_id($item, $wc_prod_id)
         {
             if(isset($item->product_id)){
-              global $wpdb;
-              $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+                global $wpdb;
+                $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
 
-              $data['wc_prod_id'] = $wc_prod_id;
-              $where['id'] = $item->product_id;
-              $result = $wpdb->update($wpdb->xwcpos_items, $data, $where);
-              if($result != 1){
-                return false;
-              }
-              return true;
+                $data['wc_prod_id'] = $wc_prod_id;
+                $where['id'] = $item->product_id;
+                $result = $wpdb->update($wpdb->xwcpos_items, $data, $where);
+                if($result != 1){
+                    return false;
+                }
+                return true;
             } else {
-              echo 'new_item appears to be empty';
+                echo 'new_item appears to be empty';
             }
             return false;
         }
@@ -2316,22 +2434,22 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         public function update_item_disassociate($item)
         {
             if(isset($item->product_id)){
-              global $wpdb;
-              $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-              $data = array(
-                'wc_prod_id' => null,
-                'xwcpos_import_date' => null,
-                'xwcpos_last_sync_date' => null,
-                'xwcpos_is_synced' => null,
-              );
-              $where['id'] = $item->product_id;
-              $result = $wpdb->update($wpdb->xwcpos_items, $data, $where);
-              if($result != 1){
-                return false;
-              }
-              return true;
+                global $wpdb;
+                $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+                $data = array(
+                    'wc_prod_id' => null,
+                    'xwcpos_import_date' => null,
+                    'xwcpos_last_sync_date' => null,
+                    'xwcpos_is_synced' => null,
+                );
+                $where['id'] = $item->product_id;
+                $result = $wpdb->update($wpdb->xwcpos_items, $data, $where);
+                if($result != 1){
+                    return false;
+                }
+                return true;
             } else {
-              echo 'new_item appears to be empty';
+                echo 'new_item appears to be empty';
             }
             return false;
         }
@@ -2504,16 +2622,16 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $result = $this->xwcpos_make_api_call($endpoint, 'Read', $ret_data['params']);
 
             if ($result == '401') {
-              ?>
+                ?>
                 <div class="error"><p><?php echo esc_html__("401 Invalid access token. Please check API connection with Kounta POS.", "xwcpos"); ?></p></div>
-              <?php 
+                <?php
             }
             if(isset($result->id)){
-              $this->update_item_data($result, $item);
+                $this->update_item_data($result, $item);
             } else {
-              echo 'there was an error';
+                echo 'there was an error';
             }
-            
+
 
             return $item->product_id;
         }
@@ -2576,63 +2694,63 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         public function update_item_data($new_item, $old_item)
         {
             if(isset($new_item->id)){
-              global $wpdb;
-              $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-              $new_item->xwcpos_last_sync_date = current_time('mysql');
+                global $wpdb;
+                $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+                $new_item->xwcpos_last_sync_date = current_time('mysql');
 
-              $mysql_args = $this->xwcpos_get_item_database_entries($new_item);
-              if( isset($mysql_args['item_id'])){
-                $where_args['id'] = isset($old_item) && isset($old_item->product_id) ? $old_item->product_id : '';
+                $mysql_args = $this->xwcpos_get_item_database_entries($new_item);
+                if( isset($mysql_args['item_id'])){
+                    $where_args['id'] = isset($old_item) && isset($old_item->product_id) ? $old_item->product_id : '';
 
-                $unset_fields = array(
-                    'created_at',
-                    'wc_prod_id',
-                    'xwcpos_import_date',
-                    'xwcpos_is_synced',
-                );
+                    $unset_fields = array(
+                        'created_at',
+                        'wc_prod_id',
+                        'xwcpos_import_date',
+                        'xwcpos_is_synced',
+                    );
 
-                foreach ($unset_fields as $field) {
-                    if (array_key_exists($field, $mysql_args)) {
-                        unset($mysql_args[$field]);
+                    foreach ($unset_fields as $field) {
+                        if (array_key_exists($field, $mysql_args)) {
+                            unset($mysql_args[$field]);
+                        }
                     }
+
+                    $where_field = array('%d');
+                    $update_fields = array(
+                        '%d', '%s', '%s', '%s', '%s', '%d',
+                        '%s', '%d', '%s', '%d', '%d', '%d',
+                        '%s', '%s', '%s', '%s', '%s', '%s',
+                        '%s', '%d'
+                    );
+
+                    $result = $wpdb->update($wpdb->xwcpos_items, $mysql_args, $where_args, $update_fields, $where_field);
+                    if($result != 1){
+                        echo 'something went wrong';
+                    }
+
+                    if(isset($new_item->sites)){
+
+                        //update prices
+                        $this->xwcpos_update_item_prices($new_item, $old_item);
+
+                        //Update Shops data
+                        $this->xwcpos_update_item_shops($new_item, $old_item);
+                    }
+                } else {
+                    echo ' do something else because the fields from database are empty';
                 }
-
-                $where_field = array('%d');
-                $update_fields = array(
-                  '%d', '%s', '%s', '%s', '%s', '%d',
-                  '%s', '%d', '%s', '%d', '%d', '%d',
-                  '%s', '%s', '%s', '%s', '%s', '%s',
-                  '%s', '%d'
-                );
-
-                $result = $wpdb->update($wpdb->xwcpos_items, $mysql_args, $where_args, $update_fields, $where_field);
-                if($result != 1){
-                  echo 'something went wrong';
-                }
-
-                if(isset($new_item->sites)){
-                  
-                  //update prices
-                  $this->xwcpos_update_item_prices($new_item, $old_item);
-
-                  //Update Shops data
-                  $this->xwcpos_update_item_shops($new_item, $old_item);
-                }
-              } else {
-                echo ' do something else because the fields from database are empty';
-              }
             } else {
-              echo 'new_item appears to be empty';
+                echo 'new_item appears to be empty';
             }
 
             // //Update Images
             // $this->xwcpos_update_item_images($new_item, $old_item);
-          
+
         }
 
         public function xwcpos_update_item_prices($new_item, $old_item)
         {
-          //var_dump($new_item);
+            //var_dump($new_item);
             // global $wpdb;
             // $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
 
@@ -2645,10 +2763,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 if ($this->xwcpos_item_price_check($site, $old_item)) {
                     $this->xwcpos_update_item_price($site, $old_item);
                 } else {
-                  if($old_item){
-                    $this->xwcpos_insert_item_price($site, isset($old_item->xwcpos_item_id) ? $old_item->xwcpos_item_id : $old_item->product_id);
-                  }
-                    
+                    if($old_item){
+                        $this->xwcpos_insert_item_price($site, isset($old_item->xwcpos_item_id) ? $old_item->xwcpos_item_id : $old_item->product_id);
+                    }
+
                 }
             }
 
@@ -2658,26 +2776,26 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $prod_id = $old_item->wc_prod_id;
 
             if($prod_id ){
-              $product = wc_get_product($prod_id);
-              if($product){
-                $wc_price = $product->get_price();
-                $wc_saleprice = $product->get_sale_price();
-                
-                $k_price = $this->xwcpos_item_price_check($site, $old_item);
+                $product = wc_get_product($prod_id);
+                if($product){
+                    $wc_price = $product->get_price();
+                    $wc_saleprice = $product->get_sale_price();
 
-                if($k_price){
-                  if($wc_saleprice != '' && ($k_price < $wc_price)){
-                    update_post_meta($prod_id, '_sale_price', number_format((float) $k_price, 2, '.', ''));
-                  } else if ($wc_saleprice != '' && ($k_price >= $wc_price)){
-                    update_post_meta($prod_id, '_sale_price', '');
-                    update_post_meta($prod_id, '_price', number_format((float) $k_price, 2, '.', ''));
-                    update_post_meta($prod_id, '_regular_price', number_format((float) $k_price, 2, '.', ''));
-                  } else {
-                    update_post_meta($prod_id, '_price', number_format((float) $k_price, 2, '.', ''));
-                    update_post_meta($prod_id, '_regular_price', number_format((float) $k_price, 2, '.', ''));
-                  }
+                    $k_price = $this->xwcpos_item_price_check($site, $old_item);
+
+                    if($k_price){
+                        if($wc_saleprice != '' && ($k_price < $wc_price)){
+                            update_post_meta($prod_id, '_sale_price', number_format((float) $k_price, 2, '.', ''));
+                        } else if ($wc_saleprice != '' && ($k_price >= $wc_price)){
+                            update_post_meta($prod_id, '_sale_price', '');
+                            update_post_meta($prod_id, '_price', number_format((float) $k_price, 2, '.', ''));
+                            update_post_meta($prod_id, '_regular_price', number_format((float) $k_price, 2, '.', ''));
+                        } else {
+                            update_post_meta($prod_id, '_price', number_format((float) $k_price, 2, '.', ''));
+                            update_post_meta($prod_id, '_regular_price', number_format((float) $k_price, 2, '.', ''));
+                        }
+                    }
                 }
-              }
 
             }
 
@@ -2699,10 +2817,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 if ($this->xwcpos_item_shop_check($site, $old_item)) {
                     $this->xwcpos_update_item_shop($site, $old_item);
                 } else {
-                  if($old_item){
-                    $this->xwcpos_insert_shop_item($old_item->product_ls_id, $site, isset($old_item->xwcpos_item_id)?$old_item->xwcpos_item_id:$old_item->product_id );
-                    //$item_id, $site, $xwcpos_item_id
-                  }
+                    if($old_item){
+                        $this->xwcpos_insert_shop_item($old_item->product_ls_id, $site, isset($old_item->xwcpos_item_id)?$old_item->xwcpos_item_id:$old_item->product_id );
+                        //$item_id, $site, $xwcpos_item_id
+                    }
                 }
             }
 
@@ -2760,11 +2878,11 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             global $wpdb;
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
             if($old_item){
-              $result = $wpdb->get_results($wpdb->prepare("SELECT * FROM " . $wpdb->xwcpos_item_shops . " WHERE xwcpos_item_id = %d", $old_item->xwcpos_item_id));
+                $result = $wpdb->get_results($wpdb->prepare("SELECT * FROM " . $wpdb->xwcpos_item_shops . " WHERE xwcpos_item_id = %d", $old_item->xwcpos_item_id));
             } else {
-              $result = array();
+                $result = array();
             }
-            
+
 
             foreach ($result as $shop) {
                 if ($shop->shop_id == $site->id) {
@@ -2828,7 +2946,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
 
             $mysql_args = array(
-               'qoh' => isset($site->stock) ? $site->stock : null,
+                'qoh' => isset($site->stock) ? $site->stock : null,
             );
 
             // if(!($site->stock >= 0) && !($site->stock <= 0)){
