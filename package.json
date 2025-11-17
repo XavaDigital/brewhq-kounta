@@ -1,0 +1,31 @@
+{
+  "name": "brewhq-kounta",
+  "version": "1.0.0",
+  "description": "Integration between Kounta POS & WooCommerce for BrewHQ",
+  "scripts": {
+    "wp-env": "wp-env",
+    "env:start": "wp-env start",
+    "env:stop": "wp-env stop",
+    "env:destroy": "wp-env destroy",
+    "env:clean": "wp-env clean all",
+    "env:logs": "wp-env logs",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f wordpress",
+    "docker:restart": "docker-compose restart",
+    "docker:clean": "docker-compose down -v",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "wordpress",
+    "woocommerce",
+    "kounta",
+    "pos",
+    "integration"
+  ],
+  "author": "David Baird / Xava Digital",
+  "license": "GPL-2.0+",
+  "devDependencies": {
+    "@wordpress/env": "^10.12.0"
+  }
+}

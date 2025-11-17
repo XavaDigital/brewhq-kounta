@@ -137,12 +137,12 @@ class WP_MOSAPICall
         }
 
         // Write the log file.
-        $file  = $upload_dir . '/' . $file . '.log';
-        $file  = fopen( $file, $mode );
-        $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" );
-        fclose( $file );
+        // $file  = $upload_dir . '/' . $file . '.log';
+        // $file  = fopen( $file, $mode );
+        // $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" );
+        // fclose( $file );
 
-        return $bytes;
+        // return $bytes;
     }
 
     protected static function _makeCall($curl, $url, $body)
