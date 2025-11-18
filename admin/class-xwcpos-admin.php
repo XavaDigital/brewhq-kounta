@@ -101,8 +101,6 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
 
             add_submenu_page('xwcpos-integration', esc_html__('API Settings', 'xwcpos'), esc_html__('API Settings', 'xwcpos'), 'manage_options', 'xwcpos-integration', array($this, 'xwcpos_kounta_integration_callback'));
 
-            add_submenu_page('xwcpos-integration', esc_html__('Import Categories', 'xwcpos'), esc_html__('Import Categories', 'xwcpos'), 'manage_options', 'xwcpos-integration-cats', array($this, 'xwcpos_ewlops_cats_import_callback'));
-
             $hook = add_submenu_page('xwcpos-integration', esc_html__('Import Products', 'xwcpos'), esc_html__('Import Products', 'xwcpos'), 'manage_options', 'xwcpos-integration-products', array($this, 'xwcpos_ewlops_products_import_callback'));
 
             add_action("load-$hook", array($this, 'xwcpos_screen_option'));
@@ -172,6 +170,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             $sync_titles = get_option('xwcpos_sync_titles', true);
             $overwrite_images = get_option('xwcpos_overwrite_images', false);
             $overwrite_descriptions = get_option('xwcpos_overwrite_descriptions', false);
+
+            // Get order sync settings
+            $send_order_error_emails = get_option('xwcpos_send_order_error_emails', true);
+            $error_notification_email = get_option('xwcpos_error_notification_email', get_option('admin_email'));
 
             if (get_option('xwcpos_shipping_product_id') != '') {
                 $xwcpos_shipping_product_id = esc_attr(get_option('xwcpos_shipping_product_id'));
@@ -248,9 +250,15 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
 
             ?>
 
-			<h1><?php echo esc_html__("WooCommerce Kounta POS Integration", "xwcpos"); ?></h1>
-			<p><?php echo esc_html__("Import Kounta POS Cloud data to your WooCommerce store.", "xwcpos"); ?></p>
-			<form action="" method="post">
+        <div class="wrap">
+            <h1 class="wp-heading-inline"><?php echo esc_html__("API Settings", "xwcpos"); ?></h1>
+            <hr class="wp-header-end">
+
+            <p class="description" style="margin-top: 15px;">
+                <?php echo esc_html__("Configure your Kounta POS API connection and sync settings.", "xwcpos"); ?>
+            </p>
+
+            <form action="" method="post" style="margin-top: 20px;">
         <div class="xwcpos_section">
           <h2>API key</h2>
           <p class="xwcpos_main">
@@ -344,10 +352,49 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
           </p>
         </div>
 
+        <div class="xwcpos_section">
+          <h2>Order Sync Notifications</h2>
+          <p>Configure email notifications for failed order syncs</p>
+
+          <p class="xwcpos_main">
+            <label>
+              <input type="checkbox" name="xwcpos_send_order_error_emails" id="xwcpos_send_order_error_emails" value="1" <?php checked($send_order_error_emails, true); ?> />
+              <?php echo esc_html__("Send email notifications when order sync fails", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main">
+            <label for="xwcpos_error_notification_email">
+              <?php echo esc_html__("Error notification email address:", "xwcpos"); ?>
+            </label><br/>
+            <input type="email" name="xwcpos_error_notification_email" id="xwcpos_error_notification_email" value="<?php echo esc_attr($error_notification_email); ?>" style="width: 300px;" />
+            <br/><small>Leave blank to use the WordPress admin email</small>
+          </p>
+        </div>
+
         <p class="xwcpos_main">
-            <input type="submit" class="button button-primary button-large" name="xwcpos_submit" value="<?php echo esc_html__("Save Setting", "xwcpos"); ?>">
+            <input type="submit" class="button button-primary button-large" name="xwcpos_submit" value="<?php echo esc_html__("Save Settings", "xwcpos"); ?>">
           </p>
 			</form>
+
+            <!-- Import Categories Section -->
+            <div class="xwcpos_section" style="margin-top: 40px; padding-top: 30px; border-top: 1px solid #dcdcde;">
+                <h2><?php echo esc_html__("Import Categories", "xwcpos"); ?></h2>
+                <p class="description">
+                    <?php echo esc_html__("Import product categories from Kounta POS to WooCommerce.", "xwcpos"); ?>
+                </p>
+                <div class="output"></div>
+                <div class="errosmessage error"></div>
+                <div class="success_message updated"></div>
+                <p style="margin-top: 20px;">
+                    <a href="javascript:void(0)" class="button button-secondary button-large" onclick="xwcpos_importCats()">
+                        <?php echo esc_html__("Import Kounta Categories", "xwcpos"); ?>
+                    </a>
+                    <span class="spinner"></span>
+                </p>
+            </div>
+
+        </div><!-- .wrap -->
 
 			<?php
           //OAuth2 fields
@@ -449,6 +496,13 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             update_option('xwcpos_overwrite_images', $overwrite_images);
             update_option('xwcpos_overwrite_descriptions', $overwrite_descriptions);
 
+            // Save order notification settings
+            $send_order_error_emails = isset($_POST['xwcpos_send_order_error_emails']) ? true : false;
+            $error_notification_email = isset($_POST['xwcpos_error_notification_email']) ? sanitize_email($_POST['xwcpos_error_notification_email']) : '';
+
+            update_option('xwcpos_send_order_error_emails', $send_order_error_emails);
+            update_option('xwcpos_error_notification_email', $error_notification_email);
+
         }
 
         public function xwcpos_get_account($account, $token)
@@ -493,12 +547,6 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
                 };
                 wp_cache_set('xwcpos_init_errors_displayed', true);
             }
-        }
-
-        public function xwcpos_ewlops_cats_import_callback()
-        {
-
-            require_once XWCPOS_PLUGIN_DIR . 'admin/class-xwcpos-import-categories.php';
         }
 
         public function xwcpos_ewlops_products_import_callback()

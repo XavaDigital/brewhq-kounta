@@ -124,25 +124,78 @@ class Kounta_Batch_Processor {
      */
     private function batch_update_table($table, $updates) {
         global $wpdb;
-        
+
         $success_count = 0;
-        
+        $error_count = 0;
+        $zero_rows_count = 0;
+
         // Use INSERT ... ON DUPLICATE KEY UPDATE for better performance
         if (count($updates) > 0) {
             foreach ($updates as $update) {
                 $where = $update['where'] ?? array();
                 $data = $update['data'] ?? array();
-                
-                if (!empty($where) && !empty($data)) {
-                    $result = $wpdb->update($table, $data, $where);
-                    if ($result !== false) {
-                        $success_count++;
-                    }
+
+                if (empty($where) || empty($data)) {
+                    $error_count++;
+                    $this->log_error('Batch update skipped: empty where or data clause', array(
+                        'table' => $table,
+                        'where' => $where,
+                        'data' => $data,
+                    ));
+                    continue;
+                }
+
+                $result = $wpdb->update($table, $data, $where);
+
+                if ($result === false) {
+                    $error_count++;
+                    $this->log_error('Database update failed', array(
+                        'table' => $table,
+                        'where' => $where,
+                        'data' => $data,
+                        'error' => $wpdb->last_error,
+                    ));
+                } elseif ($result === 0) {
+                    // 0 rows affected - might be because data is the same or row doesn't exist
+                    $zero_rows_count++;
+                } else {
+                    $success_count++;
                 }
             }
         }
-        
+
+        // Log summary if there were issues
+        if ($error_count > 0 || $zero_rows_count > 5) {
+            $this->log_error('Batch update summary', array(
+                'table' => $table,
+                'total_updates' => count($updates),
+                'successful' => $success_count,
+                'errors' => $error_count,
+                'zero_rows_affected' => $zero_rows_count,
+            ));
+        }
+
         return $success_count;
+    }
+
+    /**
+     * Log error with context
+     *
+     * @param string $message Error message
+     * @param array $context Context data
+     */
+    private function log_error($message, $context = array()) {
+        $log_message = '[Batch Processor] ' . $message;
+        if (!empty($context)) {
+            $log_message .= ' - Context: ' . json_encode($context);
+        }
+
+        error_log($log_message);
+
+        // Also log to WordPress debug log if enabled
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('[BrewHQ Kounta] ' . $log_message);
+        }
     }
     
     /**
@@ -154,20 +207,50 @@ class Kounta_Batch_Processor {
      */
     public function batch_insert($table, $records) {
         global $wpdb;
-        
+
         if (empty($records)) {
+            $this->log_error('Batch insert called with empty records', array('table' => $table));
             return 0;
         }
-        
+
         $success_count = 0;
-        
-        foreach ($records as $record) {
+        $error_count = 0;
+
+        foreach ($records as $index => $record) {
+            if (empty($record)) {
+                $error_count++;
+                $this->log_error('Batch insert skipped: empty record', array(
+                    'table' => $table,
+                    'index' => $index,
+                ));
+                continue;
+            }
+
             $result = $wpdb->insert($table, $record);
-            if ($result !== false) {
+
+            if ($result === false) {
+                $error_count++;
+                $this->log_error('Database insert failed', array(
+                    'table' => $table,
+                    'index' => $index,
+                    'record' => $record,
+                    'error' => $wpdb->last_error,
+                ));
+            } else {
                 $success_count++;
             }
         }
-        
+
+        // Log summary if there were errors
+        if ($error_count > 0) {
+            $this->log_error('Batch insert summary', array(
+                'table' => $table,
+                'total_records' => count($records),
+                'successful' => $success_count,
+                'errors' => $error_count,
+            ));
+        }
+
         return $success_count;
     }
 }

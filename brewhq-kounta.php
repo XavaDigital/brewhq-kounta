@@ -88,6 +88,11 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-wp-moscurl.php';
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-xwcpos-admin.php';
 
+            // Load order logs admin page
+            if (is_admin()) {
+                require_once XWCPOS_PLUGIN_DIR . 'admin/class-kounta-order-logs-page.php';
+            }
+
             add_action('wp_ajax_xwcposImpCats', array($this, 'xwcposImpCats'));
             add_action('wp_ajax_xwcposImpProds', array($this, 'xwcposImpProds'));
             add_action('wp_ajax_xwcposSyncAllProds', array($this, 'xwcposSyncAllProds'));

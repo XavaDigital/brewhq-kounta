@@ -100,13 +100,20 @@ class Kounta_API_Client {
     public function make_request($endpoint, $method = 'GET', $params = array(), $data = array()) {
         // Wait for rate limiter
         $this->rate_limiter->wait_if_needed();
-        
+
         $url = $this->api_base_url . $endpoint;
-        
+
         if (!empty($params)) {
             $url .= '?' . http_build_query($params);
         }
-        
+
+        // Log request details (excluding sensitive data)
+        $this->log(sprintf(
+            'API Request: %s %s',
+            $method,
+            $endpoint
+        ));
+
         $args = array(
             'method' => $method,
             'headers' => array(
@@ -122,60 +129,99 @@ class Kounta_API_Client {
         } elseif (!empty($this->client_id) && !empty($this->client_secret)) {
             $args['headers']['Authorization'] = 'Basic ' . base64_encode($this->client_id . ':' . $this->client_secret);
         } else {
-            return new WP_Error('no_credentials', 'No API credentials configured. Please configure the plugin settings.');
+            $error = new WP_Error('no_credentials', 'No API credentials configured. Please configure the plugin settings.');
+            $this->log('ERROR: ' . $error->get_error_message());
+            return $error;
         }
-        
+
         if (!empty($data) && in_array($method, array('POST', 'PUT', 'PATCH'))) {
             $args['body'] = is_string($data) ? $data : json_encode($data);
         }
-        
+
+        $start_time = microtime(true);
         $response = wp_remote_request($url, $args);
-        
+        $duration = microtime(true) - $start_time;
+
         // Record the request for rate limiting
         $this->rate_limiter->record_request();
-        
+
         if (is_wp_error($response)) {
+            $this->log(sprintf(
+                'ERROR: API request failed - %s (Duration: %.2fs)',
+                $response->get_error_message(),
+                $duration
+            ));
             return $response;
         }
-        
+
         $status_code = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
+
+        // Log response status
+        $this->log(sprintf(
+            'API Response: HTTP %d (Duration: %.2fs)',
+            $status_code,
+            $duration
+        ));
         
         // Handle rate limiting
         if ($status_code === 429) {
             $retry_after = wp_remote_retrieve_header($response, 'Retry-After');
+            $this->log('WARNING: Rate limit hit (HTTP 429), retrying after: ' . ($retry_after ?: 'default delay'));
             $this->rate_limiter->handle_rate_limit($retry_after);
             // Retry the request
             return $this->make_request($endpoint, $method, $params, $data);
         }
-        
+
         // Handle token refresh (only if using OAuth)
         if ($status_code === 401 && !empty($this->access_token)) {
+            $this->log('WARNING: Authentication failed (HTTP 401), attempting token refresh');
             $refresh_result = $this->refresh_access_token();
             if ($refresh_result === true) {
+                $this->log('INFO: Token refreshed successfully, retrying request');
                 // Retry with new token
                 return $this->make_request($endpoint, $method, $params, $data);
             }
 
             // Return detailed error message
             if (is_wp_error($refresh_result)) {
+                $this->log('ERROR: Token refresh failed - ' . $refresh_result->get_error_message());
                 return $refresh_result;
             }
 
-            return new WP_Error('auth_failed', 'Authentication failed: Unable to refresh access token. Please check your API credentials in the plugin settings.');
+            $error = new WP_Error('auth_failed', 'Authentication failed: Unable to refresh access token. Please check your API credentials in the plugin settings.');
+            $this->log('ERROR: ' . $error->get_error_message());
+            return $error;
         }
 
         if ($status_code === 401) {
-            return new WP_Error('auth_failed', 'Authentication failed (HTTP 401). Please check your API credentials in the plugin settings.');
+            $error = new WP_Error('auth_failed', 'Authentication failed (HTTP 401). Please check your API credentials in the plugin settings.');
+            $this->log('ERROR: ' . $error->get_error_message());
+            return $error;
         }
 
         if ($status_code >= 400) {
             $error_body = json_decode($body);
             $error_msg = isset($error_body->error_description) ? $error_body->error_description : $body;
-            return new WP_Error('api_error', 'API Error ' . $status_code . ': ' . $error_msg);
+            $full_error = 'API Error ' . $status_code . ': ' . $error_msg;
+            $this->log('ERROR: ' . $full_error);
+
+            // Log additional error details for debugging
+            if ($status_code >= 500) {
+                $this->log('ERROR: Server error details - Endpoint: ' . $endpoint . ', Method: ' . $method);
+            }
+
+            return new WP_Error('api_error', $full_error, array('http_code' => $status_code));
         }
-        
-        return json_decode($body);
+
+        $decoded = json_decode($body);
+
+        // Check for JSON decode errors
+        if ($body && $decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            $this->log('ERROR: Failed to decode JSON response - ' . json_last_error_msg() . ' - Body preview: ' . substr($body, 0, 200));
+        }
+
+        return $decoded;
     }
 
     /**

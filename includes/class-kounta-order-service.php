@@ -42,6 +42,9 @@ class Kounta_Order_Service {
         $this->api_client = new Kounta_API_Client();
         $this->retry_strategy = new Kounta_Retry_Strategy(5, 1.0); // 5 attempts, 1s base delay
         $this->plugin = $plugin;
+
+        // Load order logger
+        require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-order-logger.php';
     }
     
     /**
@@ -73,25 +76,44 @@ class Kounta_Order_Service {
         }
         
         $order->add_order_note('Starting optimized order upload with retry logic');
-        
+
+        // Log sync start
+        Kounta_Order_Logger::log_order_sync($order_id, 'prepare', array(
+            'message' => 'Starting order preparation',
+        ));
+
         // Prepare order data
         $order_data = $this->prepare_order_data($order);
-        
+
         if (isset($order_data['error'])) {
+            Kounta_Order_Logger::log_order_failure($order_id, $order_data, array(), 0);
             return $order_data;
         }
+
+        // Log prepared data
+        Kounta_Order_Logger::log_order_sync($order_id, 'prepared', array(
+            'message' => 'Order data prepared successfully',
+            'item_count' => count($order_data['lines']),
+            'total' => $order_data['payments'][0]['amount'] ?? 0,
+        ));
         
         // Execute with retry logic
         try {
+            $attempt = 0;
             $result = $this->retry_strategy->execute(
-                function() use ($order_data, $order) {
-                    return $this->upload_order($order_data, $order);
+                function() use ($order_data, $order, $order_id, &$attempt) {
+                    $attempt++;
+                    Kounta_Order_Logger::log_order_sync($order_id, 'upload_attempt', array(
+                        'attempt' => $attempt,
+                        'message' => "Upload attempt #{$attempt}",
+                    ));
+                    return $this->upload_order($order_data, $order, $order_id, $attempt);
                 },
                 function($error) {
                     return $this->is_retryable_order_error($error);
                 }
             );
-            
+
             // Handle result
             if (is_array($result) && isset($result['error'])) {
                 $order->add_order_note(sprintf(
@@ -99,10 +121,18 @@ class Kounta_Order_Service {
                     $result['error'],
                     $result['error_description'] ?? 'No description'
                 ));
-                
+
+                // Log comprehensive failure
+                Kounta_Order_Logger::log_order_failure($order_id, $result, $order_data, $attempt);
+
+                // Send email notification if enabled
+                if (get_option('xwcpos_send_order_error_emails', true)) {
+                    Kounta_Order_Logger::send_error_notification($order_id, $result, $order_data);
+                }
+
                 // Add to failed queue for later retry
                 $this->add_to_failed_queue($order_id, $result);
-                
+
                 return array(
                     'success' => false,
                     'error' => $result['error'],
@@ -115,7 +145,14 @@ class Kounta_Order_Service {
                 update_post_meta($order_id, '_kounta_id', $result);
                 update_post_meta($order_id, '_kounta_upload_time', current_time('mysql'));
                 $order->add_order_note('Order uploaded to Kounta successfully. Order#: ' . $result);
-                
+
+                // Log success
+                Kounta_Order_Logger::log_order_sync($order_id, 'success', array(
+                    'kounta_order_id' => $result,
+                    'attempts' => $attempt,
+                    'message' => 'Order uploaded successfully',
+                ));
+
                 return array(
                     'success' => true,
                     'order_id' => $result,
@@ -130,12 +167,18 @@ class Kounta_Order_Service {
             
         } catch (Exception $e) {
             $order->add_order_note('Order upload exception: ' . $e->getMessage());
-            
-            $this->add_to_failed_queue($order_id, array(
+
+            $error_data = array(
                 'error' => 'exception',
                 'error_description' => $e->getMessage(),
-            ));
-            
+                'stack_trace' => $e->getTraceAsString(),
+            );
+
+            // Log exception with full details
+            Kounta_Order_Logger::log_order_failure($order_id, $error_data, $order_data ?? array(), $attempt ?? 0);
+
+            $this->add_to_failed_queue($order_id, $error_data);
+
             return array(
                 'success' => false,
                 'error' => 'exception',
@@ -164,11 +207,24 @@ class Kounta_Order_Service {
             
             // Prepare order items
             $order_items = array();
+            $skipped_items = array();
+
             foreach ($order->get_items() as $item) {
                 $item_data = $this->prepare_order_item($item, $order);
                 if ($item_data) {
                     $order_items[] = $item_data;
+                } else {
+                    $skipped_items[] = array(
+                        'name' => $item->get_name(),
+                        'product_id' => $item->get_product_id(),
+                        'variation_id' => $item->get_variation_id(),
+                    );
                 }
+            }
+
+            // Log skipped items
+            if (!empty($skipped_items)) {
+                error_log('[BrewHQ Kounta Order] Order ' . $order->get_id() . ' has ' . count($skipped_items) . ' items without Kounta mapping: ' . json_encode($skipped_items));
             }
 
             // Add shipping as line item if present
@@ -180,13 +236,19 @@ class Kounta_Order_Service {
                         'quantity' => 1,
                         'unit_price' => floatval($order->get_shipping_total()),
                     );
+                    error_log('[BrewHQ Kounta Order] Added shipping to order ' . $order->get_id() . ': $' . $order->get_shipping_total());
+                } else {
+                    error_log('[BrewHQ Kounta Order] WARNING: Order ' . $order->get_id() . ' has shipping ($' . $order->get_shipping_total() . ') but no shipping product ID configured');
                 }
             }
 
             if (empty($order_items)) {
+                $error_msg = 'No valid items in order. Total items: ' . count($order->get_items()) . ', Skipped: ' . count($skipped_items);
+                error_log('[BrewHQ Kounta Order] ERROR: ' . $error_msg . ' - Skipped items: ' . json_encode($skipped_items));
                 return array(
                     'error' => 'no_items',
-                    'error_description' => 'No valid items in order',
+                    'error_description' => $error_msg,
+                    'skipped_items' => $skipped_items,
                 );
             }
 
@@ -224,26 +286,47 @@ class Kounta_Order_Service {
      *
      * @param array $order_data Order data
      * @param WC_Order $order WooCommerce order
+     * @param int $order_id Order ID
+     * @param int $attempt Attempt number
      * @return mixed Kounta order ID or error array
      */
-    private function upload_order($order_data, $order) {
+    private function upload_order($order_data, $order, $order_id, $attempt = 1) {
         $account_id = get_option('xwcpos_account_id');
         $endpoint = 'companies/' . $account_id . '/orders';
 
         // Check if order already exists
         $existing_order = $this->find_order_by_sale_number($order_data);
         if ($existing_order) {
+            Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_found', array(
+                'kounta_order_id' => $existing_order->id,
+                'message' => 'Order already exists in Kounta',
+            ));
             return $existing_order->id;
         }
 
+        // Log API request
+        Kounta_Order_Logger::log_api_request($order_id, $endpoint, 'POST', $order_data);
+
         // Create order
+        $start_time = microtime(true);
         $result = $this->api_client->make_request($endpoint, 'POST', array(), $order_data);
+        $duration = microtime(true) - $start_time;
+
+        // Get HTTP code if available
+        $http_code = null;
+        if (is_wp_error($result)) {
+            $http_code = $result->get_error_code();
+        }
+
+        // Log API response
+        Kounta_Order_Logger::log_api_response($order_id, $result, $http_code, $duration);
 
         if (is_wp_error($result)) {
             return array(
                 'error' => 'api_error',
                 'error_description' => $result->get_error_message(),
-                'http_code' => $result->get_error_code(),
+                'http_code' => $http_code,
+                'duration' => round($duration, 3),
             );
         }
 
@@ -344,12 +427,23 @@ class Kounta_Order_Service {
     private function get_or_create_customer($order) {
         // Use plugin method if available for backward compatibility
         if ($this->plugin && method_exists($this->plugin, 'get_kounta_customer')) {
-            return $this->plugin->get_kounta_customer($order);
+            $customer_id = $this->plugin->get_kounta_customer($order);
+            if (!$customer_id) {
+                error_log('[BrewHQ Kounta Order] Failed to get/create customer via plugin method for order ' . $order->get_id());
+            }
+            return $customer_id;
         }
 
         // Fallback implementation
+        $customer_email = $order->get_billing_email();
+
+        if (empty($customer_email)) {
+            error_log('[BrewHQ Kounta Order] Order ' . $order->get_id() . ' has no billing email');
+            return false;
+        }
+
         $customer_details = array(
-            'email' => $order->get_billing_email(),
+            'email' => $customer_email,
             'first_name' => $order->get_billing_first_name(),
             'last_name' => $order->get_billing_last_name(),
         );
@@ -358,19 +452,30 @@ class Kounta_Order_Service {
         $endpoint = 'companies/' . $account_id . '/customers';
 
         // Search by email
-        $result = $this->api_client->make_request($endpoint, 'GET', array('email' => $customer_details['email']));
+        $result = $this->api_client->make_request($endpoint, 'GET', array('email' => $customer_email));
 
-        if (!is_wp_error($result) && is_object($result) && isset($result->id)) {
+        if (is_wp_error($result)) {
+            error_log('[BrewHQ Kounta Order] Failed to search for customer: ' . $result->get_error_message());
+        } elseif (is_object($result) && isset($result->id)) {
+            error_log('[BrewHQ Kounta Order] Found existing customer: ' . $result->id . ' for email: ' . $customer_email);
             return $result->id;
         }
 
         // Create customer
+        error_log('[BrewHQ Kounta Order] Creating new customer for email: ' . $customer_email);
         $result = $this->api_client->make_request($endpoint, 'POST', array(), $customer_details);
 
-        if (!is_wp_error($result) && is_object($result) && isset($result->id)) {
+        if (is_wp_error($result)) {
+            error_log('[BrewHQ Kounta Order] Failed to create customer: ' . $result->get_error_message() . ' - Details: ' . json_encode($customer_details));
+            return false;
+        }
+
+        if (is_object($result) && isset($result->id)) {
+            error_log('[BrewHQ Kounta Order] Created new customer: ' . $result->id . ' for email: ' . $customer_email);
             return $result->id;
         }
 
+        error_log('[BrewHQ Kounta Order] Unexpected response when creating customer: ' . json_encode($result));
         return false;
     }
 
@@ -384,7 +489,11 @@ class Kounta_Order_Service {
     private function prepare_order_item($item, $order) {
         // Use plugin method if available
         if ($this->plugin && method_exists($this->plugin, 'get_order_item_for_upload')) {
-            return $this->plugin->get_order_item_for_upload($item, $order);
+            $item_data = $this->plugin->get_order_item_for_upload($item, $order);
+            if (!$item_data) {
+                error_log('[BrewHQ Kounta Order] Plugin method returned null for item: ' . $item->get_name() . ' (Product ID: ' . $item->get_product_id() . ')');
+            }
+            return $item_data;
         }
 
         // Fallback implementation
@@ -392,13 +501,24 @@ class Kounta_Order_Service {
         $kounta_product_id = get_post_meta($product_id, '_xwcpos_item_id', true);
 
         if (!$kounta_product_id) {
+            error_log('[BrewHQ Kounta Order] Product ' . $product_id . ' (' . $item->get_name() . ') has no Kounta product ID mapping');
             return null;
         }
 
+        $quantity = $item->get_quantity();
+        $total = floatval($item->get_total());
+
+        if ($quantity <= 0) {
+            error_log('[BrewHQ Kounta Order] Invalid quantity for product ' . $product_id . ': ' . $quantity);
+            return null;
+        }
+
+        $unit_price = $total / $quantity;
+
         return array(
             'product_id' => $kounta_product_id,
-            'quantity' => $item->get_quantity(),
-            'unit_price' => floatval($item->get_total()) / $item->get_quantity(),
+            'quantity' => $quantity,
+            'unit_price' => $unit_price,
         );
     }
 

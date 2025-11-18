@@ -1,25 +1,64 @@
 .xwcpos_section {
-  margin-bottom: 60px;
+  background: #fff;
+  border: 1px solid #ccd0d4;
+  border-radius: 4px;
+  padding: 20px 25px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.xwcpos_section h2 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d2327;
+  border-bottom: 1px solid #f0f0f1;
+  padding-bottom: 10px;
+}
+
+.xwcpos_section > p {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: #646970;
 }
 
 .xwcpos_main {
-  display: inline-block;
-  width: 100%;
-  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+  gap: 15px;
 }
 
 .xwcpos_main label {
-  width: 150px;
-  float: left;
-  font-weight: bold;
-  font-size: 16px;
-  margin-top: 9px;
+  min-width: 180px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #1d2327;
+  margin: 0;
+}
+
+.xwcpos_main small {
+  display: block;
+  color: #646970;
+  font-size: 13px;
+  margin-top: 5px;
 }
 
 .xwcpos_field {
-  width: 500px;
-  float: left;
-  padding: 10px;
+  flex: 1;
+  max-width: 500px;
+  padding: 8px 12px;
+  border: 1px solid #8c8f94;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.xwcpos_field:focus {
+  border-color: #2271b1;
+  box-shadow: 0 0 0 1px #2271b1;
+  outline: 2px solid transparent;
 }
 
 .xwcpos_ls {
@@ -33,15 +72,6 @@
   text-decoration: none;
   color: inherit;
   font-weight: bold;
-}
-
-.lsclass {
-  margin-top: 100px !important;
-  float: left;
-}
-
-.import_ls_cats {
-  margin-top: 50px;
 }
 
 .errosmessage {

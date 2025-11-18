@@ -93,10 +93,23 @@ class Kounta_Sync_Service {
         // Get all existing items in one query
         $existing_items = $this->get_existing_items_map();
         
+        $skipped_items = 0;
         foreach ($inventory as $item) {
+            // Validate item data
+            if (!isset($item->id)) {
+                $this->log('WARNING: Inventory item missing ID, skipping');
+                $skipped_items++;
+                continue;
+            }
+
+            if (!isset($item->stock)) {
+                $this->log('WARNING: Inventory item ' . $item->id . ' missing stock value, defaulting to 0');
+                $item->stock = 0;
+            }
+
             if (isset($existing_items[$item->id])) {
                 $xwcpos_item_id = $existing_items[$item->id];
-                
+
                 $updates[] = array(
                     'table' => $wpdb->xwcpos_item_shops,
                     'data' => array('qoh' => $item->stock),
@@ -105,27 +118,42 @@ class Kounta_Sync_Service {
                         'shop_id' => $site_id,
                     ),
                 );
+            } else {
+                $this->log('INFO: Inventory item ' . $item->id . ' not found in local database, skipping');
+                $skipped_items++;
             }
         }
-        
+
+        if ($skipped_items > 0) {
+            $this->log('WARNING: Skipped ' . $skipped_items . ' inventory items (not in local database or invalid data)');
+        }
+
         // Process batch updates
         $this->log('Processing ' . count($updates) . ' inventory updates');
         $updated_count = $this->batch_processor->batch_database_updates($updates);
+
+        // Check if update count matches expected
+        if ($updated_count < count($updates)) {
+            $failed_count = count($updates) - $updated_count;
+            $this->log('WARNING: ' . $failed_count . ' inventory updates failed. Expected: ' . count($updates) . ', Actual: ' . $updated_count);
+        }
 
         $end_time = microtime(true);
         $duration = $end_time - $start_time;
 
         $this->log(sprintf(
-            'Inventory sync completed: %d/%d items updated in %.2f seconds',
+            'Inventory sync completed: %d/%d items updated in %.2f seconds (skipped: %d)',
             $updated_count,
             count($inventory),
-            $duration
+            $duration,
+            $skipped_items
         ));
 
         return array(
             'success' => true,
             'updated' => $updated_count,
             'total' => count($inventory),
+            'skipped' => $skipped_items,
             'duration' => round($duration, 2),
         );
     }
@@ -155,17 +183,29 @@ class Kounta_Sync_Service {
     private function get_existing_items_map() {
         global $wpdb;
         $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-        
+
         $results = $wpdb->get_results(
             "SELECT id as xwcpos_item_id, item_id FROM {$wpdb->xwcpos_items}",
             ARRAY_A
         );
-        
+
+        // Check for database errors
+        if ($wpdb->last_error) {
+            $this->log('ERROR: Database query failed in get_existing_items_map - ' . $wpdb->last_error);
+            return array();
+        }
+
+        if ($results === null) {
+            $this->log('WARNING: get_existing_items_map returned null');
+            return array();
+        }
+
         $map = array();
         foreach ($results as $row) {
             $map[$row['item_id']] = $row['xwcpos_item_id'];
         }
-        
+
+        $this->log('Loaded ' . count($map) . ' existing items into map');
         return $map;
     }
     
@@ -234,11 +274,19 @@ class Kounta_Sync_Service {
         $updated = 0;
         $skipped = 0;
         $errors = 0;
+        $error_details = array();
 
         $now = time();
 
         foreach ($batch as $item) {
             try {
+                // Validate item has required fields
+                if (!isset($item->xwcpos_last_sync_date)) {
+                    $this->log('WARNING: Product item ' . ($item->id ?? 'unknown') . ' missing xwcpos_last_sync_date, skipping');
+                    $errors++;
+                    continue;
+                }
+
                 $date = new DateTime($item->xwcpos_last_sync_date, new DateTimeZone('Pacific/Auckland'));
                 $last_sync = intval($date->format('U'));
                 $lapsed = $now - $last_sync;
@@ -256,18 +304,38 @@ class Kounta_Sync_Service {
                     $updated++;
                 } else {
                     $errors++;
+                    $error_details[] = array(
+                        'item_id' => $item->item_id ?? 'unknown',
+                        'wc_prod_id' => $item->wc_prod_id ?? 'unknown',
+                        'reason' => 'sync_single_product returned false',
+                    );
                 }
 
             } catch (Exception $e) {
                 $errors++;
-                error_log('Product sync error: ' . $e->getMessage());
+                $error_msg = 'Product sync exception for item ' . ($item->item_id ?? 'unknown') . ': ' . $e->getMessage();
+                $this->log('ERROR: ' . $error_msg);
+                error_log('[BrewHQ Kounta] ' . $error_msg . ' - Stack trace: ' . $e->getTraceAsString());
+
+                $error_details[] = array(
+                    'item_id' => $item->item_id ?? 'unknown',
+                    'wc_prod_id' => $item->wc_prod_id ?? 'unknown',
+                    'reason' => 'exception',
+                    'message' => $e->getMessage(),
+                );
             }
+        }
+
+        // Log error summary if there were errors
+        if ($errors > 0) {
+            $this->log('ERROR: Batch completed with ' . $errors . ' errors. Details: ' . json_encode($error_details));
         }
 
         return array(
             'updated' => $updated,
             'skipped' => $skipped,
             'errors' => $errors,
+            'error_details' => $error_details,
         );
     }
 
@@ -281,11 +349,23 @@ class Kounta_Sync_Service {
     private function sync_single_product($item, $site_id) {
         global $wpdb;
 
+        // Validate item data
+        if (!isset($item->item_id) || !isset($item->id)) {
+            $this->log('ERROR: Invalid item data in sync_single_product - missing item_id or id');
+            return false;
+        }
+
         // Get Kounta product data
         $endpoint = 'companies/' . $this->api_client->get_account_id() . '/products/' . $item->item_id;
         $k_product = $this->api_client->make_request($endpoint);
 
         if (is_wp_error($k_product)) {
+            $this->log('ERROR: Failed to fetch product ' . $item->item_id . ' from Kounta API - ' . $k_product->get_error_message());
+            return false;
+        }
+
+        if (!$k_product) {
+            $this->log('ERROR: Empty response when fetching product ' . $item->item_id . ' from Kounta API');
             return false;
         }
 
@@ -300,62 +380,98 @@ class Kounta_Sync_Service {
             }
         }
 
+        if (!$site_data) {
+            $this->log('WARNING: Product ' . $item->item_id . ' has no data for site ' . $site_id);
+        }
+
         // Update stock
         if ($site_data) {
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
 
-            $wpdb->update(
+            $stock_value = $site_data->stock ?? 0;
+            $result = $wpdb->update(
                 $wpdb->xwcpos_item_shops,
-                array('qoh' => $site_data->stock ?? 0),
+                array('qoh' => $stock_value),
                 array(
                     'xwcpos_item_id' => $item->id,
                     'shop_id' => $site_id,
                 )
             );
 
+            // Check for database errors
+            if ($result === false) {
+                $this->log('ERROR: Failed to update stock for item ' . $item->id . ' in database - ' . $wpdb->last_error);
+            } elseif ($result === 0) {
+                $this->log('WARNING: Stock update for item ' . $item->id . ' affected 0 rows (may not exist in item_shops table)');
+            }
+
             // Update WooCommerce stock
             if ($item->wc_prod_id) {
-                update_post_meta($item->wc_prod_id, '_stock', $site_data->stock ?? 0);
+                $meta_result = update_post_meta($item->wc_prod_id, '_stock', $stock_value);
+                if ($meta_result === false) {
+                    $this->log('ERROR: Failed to update WooCommerce stock meta for product ' . $item->wc_prod_id);
+                }
             }
         }
 
         // Sync price if enabled
         if ($item->wc_prod_id && $site_data && get_option('xwcpos_sync_prices', true)) {
-            $this->sync_product_price($item, $site_data, $k_product);
+            try {
+                $this->sync_product_price($item, $site_data, $k_product);
+            } catch (Exception $e) {
+                $this->log('ERROR: Exception during price sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+            }
         }
 
         // Sync title/name if enabled
         if ($item->wc_prod_id && get_option('xwcpos_sync_titles', true)) {
-            $this->sync_product_title($item, $k_product);
+            try {
+                $this->sync_product_title($item, $k_product);
+            } catch (Exception $e) {
+                $this->log('ERROR: Exception during title sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+            }
         }
 
         // Sync images if enabled
         if ($item->wc_prod_id && get_option('xwcpos_sync_images', true)) {
-            $overwrite = get_option('xwcpos_overwrite_images', false);
-            $image_result = $this->image_sync->sync_product_images($item->wc_prod_id, $k_product, $overwrite);
+            try {
+                $overwrite = get_option('xwcpos_overwrite_images', false);
+                $image_result = $this->image_sync->sync_product_images($item->wc_prod_id, $k_product, $overwrite);
 
-            if (!$image_result['success'] && !isset($image_result['skipped'])) {
-                $this->log('Image sync failed for product ' . $item->wc_prod_id . ': ' . $image_result['message']);
+                if (!$image_result['success'] && !isset($image_result['skipped'])) {
+                    $this->log('WARNING: Image sync failed for product ' . $item->wc_prod_id . ': ' . $image_result['message']);
+                }
+            } catch (Exception $e) {
+                $this->log('ERROR: Exception during image sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
             }
         }
 
         // Sync descriptions if enabled
         if ($item->wc_prod_id && get_option('xwcpos_sync_descriptions', true)) {
-            $overwrite = get_option('xwcpos_overwrite_descriptions', false);
-            $desc_result = $this->description_sync->sync_product_description($item->wc_prod_id, $k_product, $overwrite);
+            try {
+                $overwrite = get_option('xwcpos_overwrite_descriptions', false);
+                $desc_result = $this->description_sync->sync_product_description($item->wc_prod_id, $k_product, $overwrite);
 
-            if (!$desc_result['success'] && !isset($desc_result['skipped'])) {
-                $this->log('Description sync failed for product ' . $item->wc_prod_id . ': ' . $desc_result['message']);
+                if (!$desc_result['success'] && !isset($desc_result['skipped'])) {
+                    $this->log('WARNING: Description sync failed for product ' . $item->wc_prod_id . ': ' . $desc_result['message']);
+                }
+            } catch (Exception $e) {
+                $this->log('ERROR: Exception during description sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
             }
         }
 
         // Update sync timestamp
         $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
-        $wpdb->update(
+        $result = $wpdb->update(
             $wpdb->xwcpos_items,
             array('xwcpos_last_sync_date' => current_time('mysql')),
             array('id' => $item->id)
         );
+
+        if ($result === false) {
+            $this->log('ERROR: Failed to update sync timestamp for item ' . $item->id . ' - ' . $wpdb->last_error);
+            return false;
+        }
 
         return true;
     }
