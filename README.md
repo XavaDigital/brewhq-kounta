@@ -5,6 +5,7 @@ A high-performance WordPress plugin that integrates WooCommerce with Kounta POS 
 ## 🚀 Features
 
 ### Core Functionality
+
 - **Product Sync** - Bi-directional sync between Kounta and WooCommerce
 - **Order Upload** - Automatic order creation in Kounta POS
 - **Inventory Sync** - Real-time stock level synchronization
@@ -12,18 +13,21 @@ A high-performance WordPress plugin that integrates WooCommerce with Kounta POS 
 - **Description Sync** - Product description synchronization
 
 ### Performance
+
 - **5-8x Faster** - Batch processing with concurrent API requests
 - **Smart Rate Limiting** - Token bucket algorithm prevents API throttling
 - **Optimized Database** - Batch operations for improved performance
 - **No Artificial Delays** - Intelligent request management
 
 ### Reliability
+
 - **Automatic Retry** - Exponential backoff for failed operations (5 attempts)
 - **Error Classification** - Smart handling of retryable vs non-retryable errors
 - **Failed Order Queue** - Track and retry failed orders
 - **Comprehensive Logging** - Detailed error tracking and debugging
 
 ### Admin Features
+
 - **Order Logs Dashboard** - View and manage order sync logs
 - **Failed Order Management** - Retry failed orders from admin panel
 - **Diagnostic Reports** - Generate detailed reports for troubleshooting
@@ -39,21 +43,45 @@ A high-performance WordPress plugin that integrates WooCommerce with Kounta POS 
 
 ## 🔧 Installation
 
-1. Upload the plugin files to `/wp-content/plugins/brewhq-kounta/`
-2. Activate the plugin through the 'Plugins' menu in WordPress
-3. Go to **Kounta POS Integration** → **Settings**
-4. Enter your Kounta API credentials
-5. Configure sync settings as needed
+### For Production Deployment
+
+1. **Build the plugin package:**
+
+   ```bash
+   npm run build
+   ```
+
+   This creates a clean deployment package in `dist/brewhq-kounta/`
+
+2. **Upload to WordPress:**
+
+   - Via FTP: Upload `dist/brewhq-kounta/` to `/wp-content/plugins/`
+   - Via Admin: Run `npm run build:zip` and upload the ZIP file
+
+3. **Activate the plugin** through the 'Plugins' menu in WordPress
+
+4. **Configure settings:**
+   - Go to **Kounta POS Integration** → **Settings**
+   - Enter your Kounta API credentials
+   - Configure sync settings as needed
+
+See **[BUILD.md](./BUILD.md)** for detailed deployment instructions.
+
+### For Development
+
+See **[README-DEV.md](./README-DEV.md)** for local development setup.
 
 ## ⚙️ Configuration
 
 ### API Credentials
+
 1. Log into your Kounta account
 2. Navigate to Settings → API
 3. Generate API credentials (Client ID and Secret)
 4. Enter credentials in plugin settings
 
 ### Sync Settings
+
 - **Site ID** - Your Kounta site identifier
 - **Account ID** - Your Kounta account identifier
 - **Sync Prices** - Enable/disable price synchronization
@@ -64,10 +92,12 @@ A high-performance WordPress plugin that integrates WooCommerce with Kounta POS 
 ## 📖 Documentation
 
 ### User Guides
+
 - **[Admin UI Guide](./ADMIN-UI-GUIDE.md)** - Using the admin interface
 - **[Debugging Guide](./DEBUGGING-GUIDE.md)** - Troubleshooting common issues
 
 ### Technical Documentation
+
 - **[Error Handling README](./ERROR-HANDLING-README.md)** - Error handling and logging overview
 - **[Performance Improvements](./PERFORMANCE-IMPROVEMENTS.md)** - Performance optimization details
 - **[Reliability Improvements](./RELIABILITY-IMPROVEMENTS.md)** - Retry logic and reliability features
@@ -75,23 +105,28 @@ A high-performance WordPress plugin that integrates WooCommerce with Kounta POS 
 - **[Image & Description Sync](./IMAGE-DESCRIPTION-SYNC-PLAN.md)** - Image and description sync features
 
 ### Development
+
 - **[Development Setup](./README-DEV.md)** - Setting up local development environment
 - **[Roadmap](./ROADMAP.md)** - Future development plans and enhancements
 
 ## 🔍 Quick Start
 
 ### Sync Products from Kounta
+
 1. Go to **Kounta POS Integration** → **Import Products**
 2. Click **⚡ Optimized Sync (Fast)** button
 3. Wait for sync to complete
 4. Products will appear in WooCommerce
 
 ### Upload Orders to Kounta
+
 Orders are automatically uploaded when:
+
 - Customer completes checkout
 - Order status changes to "On Hold"
 
 ### View Order Logs
+
 1. Go to **Kounta POS Integration** → **Order Sync Logs**
 2. View recent sync attempts
 3. Check failed orders
@@ -102,16 +137,19 @@ Orders are automatically uploaded when:
 ### Common Issues
 
 **Products not syncing?**
+
 - Check API credentials in settings
 - Verify products are assigned to your site in Kounta
 - Check logs at `wp-content/uploads/brewhq-kounta.log`
 
 **Orders failing to upload?**
+
 - Ensure products have Kounta product ID mapping
 - Check customer email is valid
 - Review order logs for specific errors
 
 **Stock levels not updating?**
+
 - Verify site ID is correct
 - Check items exist in `xwcpos_item_shops` table
 - Review inventory sync logs
@@ -121,12 +159,15 @@ See [DEBUGGING-GUIDE.md](./DEBUGGING-GUIDE.md) for detailed troubleshooting step
 ## 📊 Logging
 
 ### Log Locations
+
 - **Plugin Log**: `wp-content/uploads/brewhq-kounta.log`
 - **Order Logs**: `wp-content/uploads/kounta-order-logs/`
 - **WordPress Debug**: `wp-content/debug.log` (when WP_DEBUG enabled)
 
 ### Enable Debug Mode
+
 Add to `wp-config.php`:
+
 ```php
 define('WP_DEBUG', true);
 define('WP_DEBUG_LOG', true);
@@ -136,6 +177,7 @@ define('WP_DEBUG_DISPLAY', false);
 ## 🏗️ Architecture
 
 ### Core Classes
+
 - `Kounta_API_Client` - API communication with rate limiting
 - `Kounta_Sync_Service` - Product and inventory synchronization
 - `Kounta_Order_Service` - Order upload with retry logic
@@ -145,6 +187,7 @@ define('WP_DEBUG_DISPLAY', false);
 - `Kounta_Retry_Strategy` - Exponential backoff retry logic
 
 ### Database Tables
+
 - `wp_xwcpos_items` - Product mappings
 - `wp_xwcpos_item_shops` - Site-specific inventory
 - `wp_xwcpos_item_prices` - Product pricing
@@ -161,12 +204,14 @@ This plugin is proprietary software. See [LICENSE](./LICENSE) for details.
 ## 🔗 Support
 
 For support, please contact:
+
 - Email: support@brewhq.com
 - Documentation: See files in this repository
 
 ## 📝 Changelog
 
 ### Version 2.0 (Current)
+
 - ✅ Comprehensive error handling and logging
 - ✅ Performance improvements (5-8x faster)
 - ✅ Automatic retry with exponential backoff
@@ -176,6 +221,7 @@ For support, please contact:
 - ✅ Smart rate limiting
 
 ### Version 1.0
+
 - Initial release
 - Basic product sync
 - Order upload functionality
@@ -186,4 +232,3 @@ For support, please contact:
 **Maintained by:** BrewHQ Development Team  
 **Last Updated:** 2024-01-15  
 **Version:** 2.0
-

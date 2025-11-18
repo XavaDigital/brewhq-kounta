@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Integration between Kounta POS & WooCommerce for BrewHQ",
   "scripts": {
+    "build": "node build.js",
+    "build:zip": "node build.js && cd dist && powershell Compress-Archive -Path brewhq-kounta -DestinationPath brewhq-kounta.zip -Force",
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "wp-env": "wp-env",
     "env:start": "wp-env start",
     "env:stop": "wp-env stop",
