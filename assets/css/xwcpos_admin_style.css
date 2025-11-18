@@ -1,81 +1,112 @@
 .xwcpos_section {
-	margin-bottom: 60px;
+  margin-bottom: 60px;
 }
 
 .xwcpos_main {
-	display: inline-block;
-	width: 100%;
-	margin-top: 20px;
+  display: inline-block;
+  width: 100%;
+  margin-top: 20px;
 }
 
 .xwcpos_main label {
-	width: 150px;
-	float: left;
-	font-weight: bold;
-	font-size: 16px;
-	margin-top: 9px;
+  width: 150px;
+  float: left;
+  font-weight: bold;
+  font-size: 16px;
+  margin-top: 9px;
 }
 
 .xwcpos_field {
-	width: 500px;
-	float: left;
-	padding: 10px;
+  width: 500px;
+  float: left;
+  padding: 10px;
 }
 
 .xwcpos_ls {
-	background: url("../images/ls.png");
-	background-repeat: no-repeat;
-	background-position: left-center;
-	background-color: white;
-	padding: 15px 10px 15px 60px;
-	border: 1px solid silver;
-	border-radius: 3px;
-	text-decoration: none;
-	color: inherit;
-	font-weight: bold;
+  background: url("../images/ls.png");
+  background-repeat: no-repeat;
+  background-position: left-center;
+  background-color: white;
+  padding: 15px 10px 15px 60px;
+  border: 1px solid silver;
+  border-radius: 3px;
+  text-decoration: none;
+  color: inherit;
+  font-weight: bold;
 }
 
 .lsclass {
-	margin-top: 100px !important;
-	float: left;
+  margin-top: 100px !important;
+  float: left;
 }
 
 .import_ls_cats {
-	margin-top: 50px;
+  margin-top: 50px;
 }
 
 .errosmessage {
-	display: none;
+  display: none;
 }
 
 .success_message {
-	display: none;
+  display: none;
 }
 
 .spinner_wrapper {
-	display: inline-block;
+  display: inline-block;
 }
 
 .spinner {
-	visibility: visible !important;
-	display: none;
-	float: right;
+  visibility: visible !important;
+  display: none;
+  float: right;
 }
 
 .loadbtu {
-	margin-top: 15px;
+  margin-top: 15px;
 }
 
 .last_load {
-	width: auto;
-	margin-top: 15px;
-	font-size: 15px;
+  width: auto;
+  margin-top: 15px;
+  font-size: 15px;
 }
 
 .errpro {
-	color: red;
+  color: red;
 }
 
 .successpro {
-	color: green;
+  color: green;
+}
+
+/* Sync Status Badges */
+.xwcpos-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.xwcpos-sync-badge .dashicons {
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+}
+
+.xwcpos-sync-enabled {
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.xwcpos-sync-disabled {
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
 }

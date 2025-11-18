@@ -78,6 +78,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         {
 
             $this->xwcpos_globconstants();
+
+            // Load new optimized classes
+            require_once XWCPOS_PLUGIN_DIR . 'includes/autoloader.php';
+
             add_action('init', array($this, 'xwcpos_init'));
             register_activation_hook(__FILE__, array($this, 'xwcpos_mod_tables'));
             require_once XWCPOS_PLUGIN_DIR . 'admin/class-wp-mosapicall.php';
@@ -90,6 +94,22 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             //add_action('wp_ajax_xwcposSyncProds', array($this, 'xwcposSyncProds'));
             add_action('wp_ajax_xwcposCheckCart', array($this, 'xwcposCheckCart'));
             add_action('wp_ajax_xwcposSyncOrder', array($this, 'xwcposSyncOrder'));
+
+            // New optimized sync handlers
+            add_action('wp_ajax_xwcposSyncAllProdsOptimized', array($this, 'xwcposSyncAllProdsOptimized'));
+            add_action('wp_ajax_xwcposSyncInventoryOptimized', array($this, 'xwcposSyncInventoryOptimized'));
+            add_action('wp_ajax_xwcposGetSyncProgress', array($this, 'xwcposGetSyncProgress'));
+
+            // Order retry handlers
+            add_action('wp_ajax_xwcposGetFailedOrders', array($this, 'xwcposGetFailedOrders'));
+            add_action('wp_ajax_xwcposRetryFailedOrders', array($this, 'xwcposRetryFailedOrders'));
+            add_action('wp_ajax_xwcposClearFailedOrder', array($this, 'xwcposClearFailedOrder'));
+
+            // Debug log handler
+            add_action('wp_ajax_xwcposGetDebugLog', array($this, 'xwcposGetDebugLog'));
+
+            // Cleanup handler
+            add_action('wp_ajax_xwcposCleanupEmptyProducts', array($this, 'xwcposCleanupEmptyProducts'));
 
             //Schedule product sync function with WP CRON
             add_action('xwcposSyncAll_hook', array($this, 'xwcposSyncAllProdsCRON'));
@@ -1794,7 +1814,38 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         public function xwcpos_manual_add_order_to_kounta($order_id){
             $order=wc_get_order($order_id);
             $order->add_order_note( 'Manual order sync initialised.');
+
+            // Use optimized order service if available
+            $use_optimized = get_option('xwcpos_use_optimized_order_sync', true);
+            if ($use_optimized) {
+                return $this->xwcpos_add_order_to_kounta_optimized($order_id);
+            }
+
             return $this->xwcpos_add_order_to_kounta($order_id);
+        }
+
+        /**
+         * Optimized order creation with retry logic (v2.0)
+         *
+         * @param int $order_id Order ID
+         * @return array Response
+         */
+        public function xwcpos_add_order_to_kounta_optimized($order_id) {
+            try {
+                $order_service = new Kounta_Order_Service($this);
+                return $order_service->create_order_with_retry($order_id);
+            } catch (Exception $e) {
+                $order = wc_get_order($order_id);
+                if ($order) {
+                    $order->add_order_note('Optimized order sync exception: ' . $e->getMessage());
+                }
+
+                return array(
+                    'success' => false,
+                    'error' => 'exception',
+                    'error_description' => $e->getMessage(),
+                );
+            }
         }
 
         public function xwcpos_add_order_to_kounta($order_id){
@@ -3081,8 +3132,341 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $wpdb->delete($wpdb->xwcpos_item_images, array('image_id' => $old_image->image_id), array('%d'));
         }
 
+        /**
+         * ========================================================================
+         * OPTIMIZED SYNC METHODS (v2.0)
+         * ========================================================================
+         * These methods use the new architecture with rate limiting and batch
+         * processing for dramatically improved performance.
+         */
+
+        /**
+         * Optimized sync all products (AJAX handler)
+         *
+         * Uses new Kounta_Sync_Service for improved performance
+         */
+        public function xwcposSyncAllProdsOptimized() {
+            try {
+                $sync_service = new Kounta_Sync_Service();
+
+                // First sync inventory
+                $inventory_result = $sync_service->sync_inventory_optimized();
+
+                if (!$inventory_result['success']) {
+                    echo json_encode(array(
+                        'success' => false,
+                        'error' => $inventory_result['error'],
+                    ));
+                    wp_die();
+                }
+
+                // Then sync products
+                $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 0;
+                $product_result = $sync_service->sync_products_optimized($limit);
+
+                $this->plugin_log(sprintf(
+                    'Optimized sync completed: %d products updated in %.2f seconds',
+                    $product_result['updated'],
+                    $product_result['duration']
+                ));
+
+                echo json_encode(array(
+                    'success' => true,
+                    'inventory' => $inventory_result,
+                    'products' => $product_result,
+                    'message' => sprintf(
+                        '%d products synced successfully in %.2f seconds!',
+                        $product_result['updated'],
+                        $product_result['duration']
+                    ),
+                ));
+
+            } catch (Exception $e) {
+                $this->plugin_log('Optimized sync error: ' . $e->getMessage());
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Optimized inventory sync only (AJAX handler)
+         */
+        public function xwcposSyncInventoryOptimized() {
+            try {
+                $sync_service = new Kounta_Sync_Service();
+                $result = $sync_service->sync_inventory_optimized();
+
+                if ($result['success']) {
+                    $this->plugin_log(sprintf(
+                        'Optimized inventory sync completed: %d items updated in %.2f seconds',
+                        $result['updated'],
+                        $result['duration']
+                    ));
+                }
+
+                echo json_encode($result);
+
+            } catch (Exception $e) {
+                $this->plugin_log('Optimized inventory sync error: ' . $e->getMessage());
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Get sync progress (AJAX handler)
+         */
+        public function xwcposGetSyncProgress() {
+            try {
+                $sync_service = new Kounta_Sync_Service();
+                $progress = $sync_service->get_sync_progress();
+
+                echo json_encode(array(
+                    'success' => true,
+                    'progress' => $progress,
+                ));
+
+            } catch (Exception $e) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Optimized CRON sync handler
+         */
+        public function xwcposSyncAllProdsOptimizedCRON() {
+            $this->plugin_log('/**** CRON Process initiated: Optimized Sync ****/ ');
+
+            try {
+                $sync_service = new Kounta_Sync_Service();
+
+                // Sync inventory
+                $inventory_result = $sync_service->sync_inventory_optimized();
+
+                // Sync products
+                $product_result = $sync_service->sync_products_optimized();
+
+                $this->plugin_log(sprintf(
+                    'CRON optimized sync completed: %d products in %.2f seconds',
+                    $product_result['updated'],
+                    $product_result['duration']
+                ));
+
+            } catch (Exception $e) {
+                $this->plugin_log('CRON optimized sync error: ' . $e->getMessage());
+            }
+        }
+
+        /**
+         * ========================================================================
+         * ORDER RETRY HANDLERS (v2.0)
+         * ========================================================================
+         */
+
+        /**
+         * Get failed orders (AJAX handler)
+         */
+        public function xwcposGetFailedOrders() {
+            try {
+                $order_service = new Kounta_Order_Service($this);
+                $failed_orders = $order_service->get_failed_orders();
+
+                echo json_encode(array(
+                    'success' => true,
+                    'failed_orders' => $failed_orders,
+                    'count' => count($failed_orders),
+                ));
+
+            } catch (Exception $e) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Retry failed orders (AJAX handler)
+         */
+        public function xwcposRetryFailedOrders() {
+            try {
+                $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 10;
+
+                $order_service = new Kounta_Order_Service($this);
+                $results = $order_service->retry_failed_orders($limit);
+
+                $this->plugin_log(sprintf(
+                    'Failed order retry: %d succeeded, %d failed, %d skipped',
+                    $results['success'],
+                    $results['failed'],
+                    $results['skipped']
+                ));
+
+                echo json_encode(array(
+                    'success' => true,
+                    'results' => $results,
+                    'message' => sprintf(
+                        '%d orders succeeded, %d failed, %d skipped',
+                        $results['success'],
+                        $results['failed'],
+                        $results['skipped']
+                    ),
+                ));
+
+            } catch (Exception $e) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Clear failed order (AJAX handler)
+         */
+        public function xwcposClearFailedOrder() {
+            try {
+                $order_id = isset($_POST['order_id']) ? intval($_POST['order_id']) : 0;
+
+                if (!$order_id) {
+                    throw new Exception('Invalid order ID');
+                }
+
+                $order_service = new Kounta_Order_Service($this);
+                $order_service->clear_failed_order($order_id);
+
+                echo json_encode(array(
+                    'success' => true,
+                    'message' => 'Order removed from failed queue',
+                ));
+
+            } catch (Exception $e) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                ));
+            }
+
+            wp_die();
+        }
+
+        /**
+         * Get debug log (AJAX handler)
+         */
+        public function xwcposGetDebugLog() {
+            $lines = isset($_POST['lines']) ? intval($_POST['lines']) : 100;
+
+            // Get WordPress uploads directory
+            $upload_dir = wp_upload_dir();
+            $log_file = $upload_dir['basedir'] . '/brewhq-kounta.log';
+
+            if (!file_exists($log_file)) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => 'Log file not found',
+                    'path' => $log_file,
+                ));
+                wp_die();
+            }
+
+            // Read last N lines of log file
+            $file = new SplFileObject($log_file, 'r');
+            $file->seek(PHP_INT_MAX);
+            $total_lines = $file->key() + 1;
+
+            $start_line = max(0, $total_lines - $lines);
+            $log_lines = array();
+
+            $file->seek($start_line);
+            while (!$file->eof()) {
+                $line = $file->current();
+                if (!empty(trim($line))) {
+                    $log_lines[] = rtrim($line);
+                }
+                $file->next();
+            }
+
+            echo json_encode(array(
+                'success' => true,
+                'lines' => $log_lines,
+                'total_lines' => $total_lines,
+                'file_size' => filesize($log_file),
+                'file_path' => $log_file,
+            ));
+
+            wp_die();
+        }
+
+        /**
+         * Cleanup empty products (AJAX handler)
+         */
+        public function xwcposCleanupEmptyProducts() {
+            global $wpdb;
+            $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
+            $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
+            $wpdb->xwcpos_item_prices = $wpdb->prefix . 'xwcpos_item_prices';
+
+            // Find empty products
+            $empty_products = $wpdb->get_results(
+                "SELECT id FROM {$wpdb->xwcpos_items} WHERE name IS NULL OR name = ''"
+            );
+
+            if (empty($empty_products)) {
+                echo json_encode(array(
+                    'success' => true,
+                    'deleted' => 0,
+                    'message' => 'No empty products found',
+                ));
+                wp_die();
+            }
+
+            $deleted_count = 0;
+
+            foreach ($empty_products as $product) {
+                // Delete related records first
+                $wpdb->delete($wpdb->xwcpos_item_shops, array('xwcpos_item_id' => $product->id));
+                $wpdb->delete($wpdb->xwcpos_item_prices, array('xwcpos_item_id' => $product->id));
+
+                // Delete the product
+                $result = $wpdb->delete($wpdb->xwcpos_items, array('id' => $product->id));
+
+                if ($result) {
+                    $deleted_count++;
+                }
+            }
+
+            $this->plugin_log("Cleanup: Deleted {$deleted_count} empty products");
+
+            echo json_encode(array(
+                'success' => true,
+                'deleted' => $deleted_count,
+                'message' => sprintf('%d empty products deleted successfully', $deleted_count),
+            ));
+
+            wp_die();
+        }
+
     }
 
-    new BrewHQ_Kounta_POS_Int();
+    // Store instance globally so other classes can access it
+    global $xwcpos_plugin_instance;
+    $xwcpos_plugin_instance = new BrewHQ_Kounta_POS_Int();
 
 }

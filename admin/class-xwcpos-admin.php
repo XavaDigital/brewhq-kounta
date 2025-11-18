@@ -86,8 +86,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
         public function xwcpos_admin_scripts()
         {
 
-            wp_enqueue_style('xwcpos-admin', plugins_url('../assets/css/xwcpos_admin_style.css', __FILE__), false);
-            wp_enqueue_script('xwcpos-adminsc', plugins_url('../assets/js/xwcpos_admin.js', __FILE__), false);
+            wp_enqueue_style('xwcpos-admin', plugins_url('../assets/css/xwcpos_admin_style.css', __FILE__), false, '2.4.0');
+            wp_enqueue_script('xwcpos-adminsc', plugins_url('../assets/js/xwcpos_admin.js', __FILE__), array('jquery'), '2.4.0', true);
             $xwcpos_data = array(
                 'admin_url' => admin_url('admin-ajax.php'),
             );
@@ -164,6 +164,14 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             } else {
                 $xwcpos_account_id = '';
             }
+
+            // Get sync settings
+            $sync_images = get_option('xwcpos_sync_images', true);
+            $sync_descriptions = get_option('xwcpos_sync_descriptions', true);
+            $sync_prices = get_option('xwcpos_sync_prices', true);
+            $sync_titles = get_option('xwcpos_sync_titles', true);
+            $overwrite_images = get_option('xwcpos_overwrite_images', false);
+            $overwrite_descriptions = get_option('xwcpos_overwrite_descriptions', false);
 
             if (get_option('xwcpos_shipping_product_id') != '') {
                 $xwcpos_shipping_product_id = esc_attr(get_option('xwcpos_shipping_product_id'));
@@ -288,6 +296,54 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
           }}
           ?>
         </div>
+
+        <div class="xwcpos_section">
+          <h2>Product Sync Options</h2>
+          <p>Configure what product data to sync from Kounta to WooCommerce</p>
+
+          <p class="xwcpos_main">
+            <label>
+              <input type="checkbox" name="xwcpos_sync_images" id="xwcpos_sync_images" value="1" <?php checked($sync_images, true); ?> />
+              <?php echo esc_html__("Sync product images from Kounta", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main" style="margin-left: 30px;">
+            <label>
+              <input type="checkbox" name="xwcpos_overwrite_images" id="xwcpos_overwrite_images" value="1" <?php checked($overwrite_images, true); ?> />
+              <?php echo esc_html__("Overwrite existing product images", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main">
+            <label>
+              <input type="checkbox" name="xwcpos_sync_descriptions" id="xwcpos_sync_descriptions" value="1" <?php checked($sync_descriptions, true); ?> />
+              <?php echo esc_html__("Sync product descriptions from Kounta", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main" style="margin-left: 30px;">
+            <label>
+              <input type="checkbox" name="xwcpos_overwrite_descriptions" id="xwcpos_overwrite_descriptions" value="1" <?php checked($overwrite_descriptions, true); ?> />
+              <?php echo esc_html__("Overwrite existing product descriptions", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main">
+            <label>
+              <input type="checkbox" name="xwcpos_sync_prices" id="xwcpos_sync_prices" value="1" <?php checked($sync_prices, true); ?> />
+              <?php echo esc_html__("Sync product prices from Kounta", "xwcpos"); ?>
+            </label>
+          </p>
+
+          <p class="xwcpos_main">
+            <label>
+              <input type="checkbox" name="xwcpos_sync_titles" id="xwcpos_sync_titles" value="1" <?php checked($sync_titles, true); ?> />
+              <?php echo esc_html__("Sync product titles/names from Kounta", "xwcpos"); ?>
+            </label>
+          </p>
+        </div>
+
         <p class="xwcpos_main">
             <input type="submit" class="button button-primary button-large" name="xwcpos_submit" value="<?php echo esc_html__("Save Setting", "xwcpos"); ?>">
           </p>
@@ -371,12 +427,27 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             }
 
             //save gateways option
-            
+
             $result = update_option('xwcpos_payment_gateways',  json_encode( $updated_gateways));
             update_option('xwcpos_client_id', $client_id);
             update_option('xwcpos_client_secret', $client_secret);
             update_option('xwcpos_site_id', $site_id);
             update_option('xwcpos_shipping_product_id', $xwcpos_shipping_product_id);
+
+            // Save sync options
+            $sync_images = isset($_POST['xwcpos_sync_images']) ? true : false;
+            $sync_descriptions = isset($_POST['xwcpos_sync_descriptions']) ? true : false;
+            $sync_prices = isset($_POST['xwcpos_sync_prices']) ? true : false;
+            $sync_titles = isset($_POST['xwcpos_sync_titles']) ? true : false;
+            $overwrite_images = isset($_POST['xwcpos_overwrite_images']) ? true : false;
+            $overwrite_descriptions = isset($_POST['xwcpos_overwrite_descriptions']) ? true : false;
+
+            update_option('xwcpos_sync_images', $sync_images);
+            update_option('xwcpos_sync_descriptions', $sync_descriptions);
+            update_option('xwcpos_sync_prices', $sync_prices);
+            update_option('xwcpos_sync_titles', $sync_titles);
+            update_option('xwcpos_overwrite_images', $overwrite_images);
+            update_option('xwcpos_overwrite_descriptions', $overwrite_descriptions);
 
         }
 

@@ -28,32 +28,100 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
         }
 
-        public function plugin_log( $entry, $mode = 'a', $file = 'brewhq-kounta' ) { 
+        public function plugin_log( $entry, $mode = 'a', $file = 'brewhq-kounta' ) {
           // Get WordPress uploads directory.
           $upload_dir = wp_upload_dir();
           $upload_dir = $upload_dir['basedir'];
-      
+
           // If the entry is array, json_encode.
-          if ( is_array( $entry ) ) { 
-            $entry = json_encode( $entry ); 
-          } 
-      
+          if ( is_array( $entry ) ) {
+            $entry = json_encode( $entry );
+          }
+
           // Write the log file.
           $file  = $upload_dir . '/' . $file . '.log';
           $file  = fopen( $file, $mode );
-          $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" ); 
-          fclose( $file ); 
-      
+          $bytes = fwrite( $file, current_time( 'mysql' ) . "::" . $entry . "\n" );
+          fclose( $file );
+
           return $bytes;
         }
 
+        /**
+         * Fetch a single product from Kounta API by product ID
+         */
+        public function fetch_kounta_product_by_id($product_id)
+        {
+            if (empty($product_id)) {
+                $this->plugin_log('[FETCH ERROR] Empty product_id provided');
+                return null;
+            }
+
+            // Get main plugin instance to access API methods
+            if (!$this->main_class_obj) {
+                // Access the global plugin instance
+                global $xwcpos_plugin_instance;
+                if ($xwcpos_plugin_instance) {
+                    $this->main_class_obj = $xwcpos_plugin_instance;
+                } else {
+                    $this->plugin_log('[FETCH ERROR] Plugin instance not available');
+                    return null;
+                }
+            }
+
+            $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
+
+            if (empty($xwcpos_account_id)) {
+                $this->plugin_log('[FETCH ERROR] Kounta account ID not configured');
+                return null;
+            }
+
+            // Fetch single product with all relations
+            $relations = array(
+                "Sites",
+                "ItemECommerce",
+                "Tags",
+                "Images",
+            );
+
+            $search_data = array(
+                'load_relations' => json_encode($relations),
+            );
+
+            try {
+                $this->plugin_log("[FETCH] Fetching product {$product_id} from Kounta API");
+
+                $response = $this->main_class_obj->xwcpos_make_api_call(
+                    'companies/' . $xwcpos_account_id . '/products/' . $product_id,
+                    'Read',
+                    $search_data
+                );
+
+                if (is_wp_error($response)) {
+                    $this->plugin_log('[FETCH ERROR] WP_Error: ' . $response->get_error_message());
+                    return null;
+                }
+
+                if ($response) {
+                    $this->plugin_log("[FETCH] Successfully fetched product {$product_id}");
+                    return $response;
+                } else {
+                    $this->plugin_log("[FETCH ERROR] Empty response from API for product {$product_id}");
+                    return null;
+                }
+            } catch (Exception $e) {
+                $this->plugin_log('[FETCH ERROR] Exception: ' . $e->getMessage());
+                $this->plugin_log('[FETCH ERROR] Stack trace: ' . $e->getTraceAsString());
+                return null;
+            }
+        }
 
         public function get_row_actions()
         {
             $actions = array(
                 'import_sync',
-                'sync',
-                'not_sync',
+                'enable_sync',
+                'disable_sync',
                 'import',
                 'update',
                 'delete',
@@ -269,8 +337,74 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $request = $_REQUEST;
             $orderby = isset($_REQUEST['orderby']) ? $_REQUEST['orderby'] : 'item.item_id';
             $order = isset($_REQUEST['order'])? $_REQUEST['order'] : 'ASC';
-            $where = empty($_REQUEST['s']) ? '' : $_REQUEST['s'];
             $offset = ($page_number - 1) * $per_page;
+
+            // Build WHERE clause with filters
+            $where_clauses = array("item.name IS NOT NULL AND item.name != ''");
+
+            // Search filter
+            if (!empty($_REQUEST['s'])) {
+                $search = $wpdb->esc_like($_REQUEST['s']);
+                $where_clauses[] = $wpdb->prepare(
+                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s)",
+                    '%' . $search . '%',
+                    '%' . $search . '%',
+                    '%' . $search . '%'
+                );
+            }
+
+            // Category filter
+            if (!empty($_REQUEST['filter_category']) && $_REQUEST['filter_category'] !== 'all') {
+                $category_id = sanitize_text_field($_REQUEST['filter_category']);
+                $where_clauses[] = $wpdb->prepare(
+                    "item.categories LIKE %s",
+                    '%' . $wpdb->esc_like($category_id) . '%'
+                );
+            }
+
+            // Import status filter
+            if (!empty($_REQUEST['filter_import_status']) && $_REQUEST['filter_import_status'] !== 'all') {
+                $import_status = sanitize_text_field($_REQUEST['filter_import_status']);
+                if ($import_status === 'imported') {
+                    $where_clauses[] = "item.wc_prod_id IS NOT NULL AND item.wc_prod_id > 0";
+                } elseif ($import_status === 'not_imported') {
+                    $where_clauses[] = "(item.wc_prod_id IS NULL OR item.wc_prod_id = 0)";
+                }
+            }
+
+            // Sync status filter
+            if (!empty($_REQUEST['filter_sync_status']) && $_REQUEST['filter_sync_status'] !== 'all') {
+                $sync_status = sanitize_text_field($_REQUEST['filter_sync_status']);
+                if ($sync_status === 'synced') {
+                    $where_clauses[] = "item.xwcpos_is_synced = 1";
+                } elseif ($sync_status === 'not_synced') {
+                    $where_clauses[] = "(item.xwcpos_is_synced = 0 OR item.xwcpos_is_synced IS NULL)";
+                }
+            }
+
+            // Stock status filter
+            if (!empty($_REQUEST['filter_stock_status']) && $_REQUEST['filter_stock_status'] !== 'all') {
+                $stock_status = sanitize_text_field($_REQUEST['filter_stock_status']);
+                if ($stock_status === 'in_stock') {
+                    $where_clauses[] = "item_shop.qoh > 0";
+                } elseif ($stock_status === 'out_of_stock') {
+                    $where_clauses[] = "(item_shop.qoh = 0 OR item_shop.qoh IS NULL)";
+                } elseif ($stock_status === 'low_stock') {
+                    $where_clauses[] = "item_shop.qoh > 0 AND item_shop.qoh <= 5";
+                }
+            }
+
+            // Price range filter
+            if (!empty($_REQUEST['filter_price_min'])) {
+                $price_min = floatval($_REQUEST['filter_price_min']);
+                $where_clauses[] = $wpdb->prepare("item_price.amount >= %f", $price_min);
+            }
+            if (!empty($_REQUEST['filter_price_max'])) {
+                $price_max = floatval($_REQUEST['filter_price_max']);
+                $where_clauses[] = $wpdb->prepare("item_price.amount <= %f", $price_max);
+            }
+
+            $where_sql = implode(' AND ', $where_clauses);
 
             $results = $wpdb->get_results(
               "SELECT
@@ -289,23 +423,13 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
               FROM $wpdb->xwcpos_items as item
               LEFT JOIN $wpdb->xwcpos_item_categories as category ON item.categories LIKE CONCAT('%', CONCAT(category.cat_id ,'%' ))
               LEFT JOIN $wpdb->xwcpos_item_shops as item_shop ON item.id = item_shop.xwcpos_item_id
-              LEFT JOIN $wpdb->xwcpos_item_prices as item_price ON item.id = item_price.xwcpos_item_id          
+              LEFT JOIN $wpdb->xwcpos_item_prices as item_price ON item.id = item_price.xwcpos_item_id
+              WHERE $where_sql
               GROUP BY item.id
               ORDER BY $orderby
               $order
               LIMIT $per_page
               OFFSET $offset");
-
-              // would use this if you are only showing products on import page that are not already imported.
-                  
-            //var_dump($results);
-
-              //     -- item.id NOT IN(
-              //     --     SELECT id FROM $wpdb->xwcpos_items
-              //     --     WHERE item_id > 0
-              //     --     AND item_matrix_id > 0
-              //     --   )
-              //     --   AND item.description like '%$where%'
 
             return $results;
         }
@@ -318,24 +442,189 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $wpdb->xwcpos_item_prices = $wpdb->prefix . 'xwcpos_item_prices';
             // $wpdb->xwcpos_item_images = $wpdb->prefix . 'xwcpos_item_images';
             $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
-            $where = empty($_REQUEST['s']) ? '' : $_REQUEST['s'];
 
-            $sql = "SELECT COUNT(*) FROM $wpdb->xwcpos_items as item";
+            // Build WHERE clause with filters (same as xwcpos_get_items)
+            $where_clauses = array("item.name IS NOT NULL AND item.name != ''");
 
-            // would use this if you are only showing products on import page that are not already imported.
-            // -- WHERE
-            // --   item.id NOT IN(
-            // --   SELECT id FROM $wpdb->xwcpos_items
-            // --   WHERE item_id > 0
-            // --   )";
-              $result = $wpdb->get_var($sql);
+            // Search filter
+            if (!empty($_REQUEST['s'])) {
+                $search = $wpdb->esc_like($_REQUEST['s']);
+                $where_clauses[] = $wpdb->prepare(
+                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s)",
+                    '%' . $search . '%',
+                    '%' . $search . '%',
+                    '%' . $search . '%'
+                );
+            }
+
+            // Category filter
+            if (!empty($_REQUEST['filter_category']) && $_REQUEST['filter_category'] !== 'all') {
+                $category_id = sanitize_text_field($_REQUEST['filter_category']);
+                $where_clauses[] = $wpdb->prepare(
+                    "item.categories LIKE %s",
+                    '%' . $wpdb->esc_like($category_id) . '%'
+                );
+            }
+
+            // Import status filter
+            if (!empty($_REQUEST['filter_import_status']) && $_REQUEST['filter_import_status'] !== 'all') {
+                $import_status = sanitize_text_field($_REQUEST['filter_import_status']);
+                if ($import_status === 'imported') {
+                    $where_clauses[] = "item.wc_prod_id IS NOT NULL AND item.wc_prod_id > 0";
+                } elseif ($import_status === 'not_imported') {
+                    $where_clauses[] = "(item.wc_prod_id IS NULL OR item.wc_prod_id = 0)";
+                }
+            }
+
+            // Sync status filter
+            if (!empty($_REQUEST['filter_sync_status']) && $_REQUEST['filter_sync_status'] !== 'all') {
+                $sync_status = sanitize_text_field($_REQUEST['filter_sync_status']);
+                if ($sync_status === 'synced') {
+                    $where_clauses[] = "item.xwcpos_is_synced = 1";
+                } elseif ($sync_status === 'not_synced') {
+                    $where_clauses[] = "(item.xwcpos_is_synced = 0 OR item.xwcpos_is_synced IS NULL)";
+                }
+            }
+
+            // Stock status filter
+            if (!empty($_REQUEST['filter_stock_status']) && $_REQUEST['filter_stock_status'] !== 'all') {
+                $stock_status = sanitize_text_field($_REQUEST['filter_stock_status']);
+                if ($stock_status === 'in_stock') {
+                    $where_clauses[] = "item_shop.qoh > 0";
+                } elseif ($stock_status === 'out_of_stock') {
+                    $where_clauses[] = "(item_shop.qoh = 0 OR item_shop.qoh IS NULL)";
+                } elseif ($stock_status === 'low_stock') {
+                    $where_clauses[] = "item_shop.qoh > 0 AND item_shop.qoh <= 5";
+                }
+            }
+
+            // Price range filter
+            if (!empty($_REQUEST['filter_price_min'])) {
+                $price_min = floatval($_REQUEST['filter_price_min']);
+                $where_clauses[] = $wpdb->prepare("item_price.amount >= %f", $price_min);
+            }
+            if (!empty($_REQUEST['filter_price_max'])) {
+                $price_max = floatval($_REQUEST['filter_price_max']);
+                $where_clauses[] = $wpdb->prepare("item_price.amount <= %f", $price_max);
+            }
+
+            $where_sql = implode(' AND ', $where_clauses);
+
+            $sql = "SELECT COUNT(DISTINCT item.id)
+                    FROM $wpdb->xwcpos_items as item
+                    LEFT JOIN $wpdb->xwcpos_item_categories as category ON item.categories LIKE CONCAT('%', CONCAT(category.cat_id ,'%' ))
+                    LEFT JOIN $wpdb->xwcpos_item_shops as item_shop ON item.id = item_shop.xwcpos_item_id
+                    LEFT JOIN $wpdb->xwcpos_item_prices as item_price ON item.id = item_price.xwcpos_item_id
+                    WHERE $where_sql";
+
+            $result = $wpdb->get_var($sql);
 
             return $result;
         }
 
         public function no_items()
         {
-            esc_html__('No Products avaliable.', 'xwcpos');
+            // Check if filters are active
+            $has_filters = !empty($_REQUEST['filter_category']) ||
+                          !empty($_REQUEST['filter_import_status']) ||
+                          !empty($_REQUEST['filter_sync_status']) ||
+                          !empty($_REQUEST['filter_stock_status']) ||
+                          !empty($_REQUEST['filter_price_min']) ||
+                          !empty($_REQUEST['filter_price_max']) ||
+                          !empty($_REQUEST['s']);
+
+            if ($has_filters) {
+                echo '<p>' . esc_html__('No products found matching your filters. Try adjusting your search criteria.', 'xwcpos') . '</p>';
+            } else {
+                echo '<p>' . esc_html__('No Products available.', 'xwcpos') . '</p>';
+            }
+        }
+
+        /**
+         * Display filter summary above the table
+         */
+        public function display_filter_summary()
+        {
+            $active_filters = array();
+
+            if (!empty($_REQUEST['s'])) {
+                $active_filters[] = sprintf(
+                    '<strong>%s:</strong> "%s"',
+                    esc_html__('Search', 'xwcpos'),
+                    esc_html($_REQUEST['s'])
+                );
+            }
+
+            if (!empty($_REQUEST['filter_category']) && $_REQUEST['filter_category'] !== 'all') {
+                global $wpdb;
+                $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
+                $category = $wpdb->get_var($wpdb->prepare(
+                    "SELECT name FROM $wpdb->xwcpos_item_categories WHERE cat_id = %s",
+                    $_REQUEST['filter_category']
+                ));
+                if ($category) {
+                    $active_filters[] = sprintf(
+                        '<strong>%s:</strong> %s',
+                        esc_html__('Category', 'xwcpos'),
+                        esc_html($category)
+                    );
+                }
+            }
+
+            if (!empty($_REQUEST['filter_import_status']) && $_REQUEST['filter_import_status'] !== 'all') {
+                $status_labels = array(
+                    'imported' => __('Imported', 'xwcpos'),
+                    'not_imported' => __('Not Imported', 'xwcpos'),
+                );
+                $active_filters[] = sprintf(
+                    '<strong>%s:</strong> %s',
+                    esc_html__('Import Status', 'xwcpos'),
+                    esc_html($status_labels[$_REQUEST['filter_import_status']])
+                );
+            }
+
+            if (!empty($_REQUEST['filter_sync_status']) && $_REQUEST['filter_sync_status'] !== 'all') {
+                $status_labels = array(
+                    'synced' => __('Synced', 'xwcpos'),
+                    'not_synced' => __('Not Synced', 'xwcpos'),
+                );
+                $active_filters[] = sprintf(
+                    '<strong>%s:</strong> %s',
+                    esc_html__('Sync Status', 'xwcpos'),
+                    esc_html($status_labels[$_REQUEST['filter_sync_status']])
+                );
+            }
+
+            if (!empty($_REQUEST['filter_stock_status']) && $_REQUEST['filter_stock_status'] !== 'all') {
+                $status_labels = array(
+                    'in_stock' => __('In Stock', 'xwcpos'),
+                    'low_stock' => __('Low Stock (≤5)', 'xwcpos'),
+                    'out_of_stock' => __('Out of Stock', 'xwcpos'),
+                );
+                $active_filters[] = sprintf(
+                    '<strong>%s:</strong> %s',
+                    esc_html__('Stock', 'xwcpos'),
+                    esc_html($status_labels[$_REQUEST['filter_stock_status']])
+                );
+            }
+
+            if (!empty($_REQUEST['filter_price_min']) || !empty($_REQUEST['filter_price_max'])) {
+                $price_min = !empty($_REQUEST['filter_price_min']) ? floatval($_REQUEST['filter_price_min']) : 0;
+                $price_max = !empty($_REQUEST['filter_price_max']) ? floatval($_REQUEST['filter_price_max']) : '∞';
+                $active_filters[] = sprintf(
+                    '<strong>%s:</strong> $%s - $%s',
+                    esc_html__('Price Range', 'xwcpos'),
+                    $price_min,
+                    $price_max
+                );
+            }
+
+            if (!empty($active_filters)) {
+                echo '<div class="xwcpos-filter-summary" style="background: #f0f9f4; border-left: 4px solid #00a32a; padding: 12px 15px; margin: 10px 0; border-radius: 4px;">';
+                echo '<strong style="color: #00a32a;">🔍 ' . esc_html__('Active Filters:', 'xwcpos') . '</strong> ';
+                echo implode(' <span style="color: #ccc;">|</span> ', $active_filters);
+                echo '</div>';
+            }
         }
 
         public function get_columns()
@@ -351,7 +640,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 'product_category' => esc_html__('Category', 'xwcpos'),
                 'product_last_import' => esc_html__('Import Date', 'xwcpos'),
                 'product_last_sync' => esc_html__('Last Sync', 'xwcpos'),
-                'product_auto_sync' => esc_html__('Auto Sync', 'xwcpos'),
+                'product_auto_sync' => esc_html__('Sync Status', 'xwcpos'),
 
             ];
 
@@ -429,17 +718,18 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $base_url = add_query_arg($query_args, admin_url('admin.php'));
 
             $actions = array(
-                'import_and_sync' => sprintf('<a href="%s=%s">' . esc_html__("Import & Sync", "xwcpos") . '</a>', $base_url, 'import_sync'),
-                'import' => sprintf('<a href="%s=%s">' . esc_html__("Import", "xwcpos") . '</a>', $base_url, 'import'),
-                'sync' => sprintf('<a href="%s=%s">' . esc_html__("Sync", "xwcpos") . '</a>', $base_url, 'sync'),
-                'update' => sprintf('<a href="%s=%s">' . esc_html__("Update", "xwcpos") . '</a>', $base_url, 'update'),
-                'delete' => sprintf('<a href="%s=%s">' . esc_html__("Delete", "xwcpos") . '</a>', $base_url, 'delete'),
+                'import_and_sync' => sprintf('<a href="%s=%s" title="Import product to WooCommerce and enable sync">' . esc_html__("Import & Sync", "xwcpos") . '</a>', $base_url, 'import_sync'),
+                'import' => sprintf('<a href="%s=%s" title="Import product to WooCommerce only">' . esc_html__("Import", "xwcpos") . '</a>', $base_url, 'import'),
+                'enable_sync' => sprintf('<a href="%s=%s" title="Include this product in sync operations" style="color:#46b450;">' . esc_html__("Enable Sync", "xwcpos") . '</a>', $base_url, 'enable_sync'),
+                'disable_sync' => sprintf('<a href="%s=%s" title="Exclude this product from sync operations" style="color:#dc3232;">' . esc_html__("Disable Sync", "xwcpos") . '</a>', $base_url, 'disable_sync'),
+                'update' => sprintf('<a href="%s=%s" title="Update WooCommerce from internal database">' . esc_html__("Update", "xwcpos") . '</a>', $base_url, 'update'),
+                'delete' => sprintf('<a href="%s=%s" title="Delete product from internal database">' . esc_html__("Delete", "xwcpos") . '</a>', $base_url, 'delete'),
             );
 
             if ($item->wc_prod_id) {
                 if (false !== wc_get_product($item->wc_prod_id)) {
                     $edit = array(
-                        'Edit' => sprintf('<a href="%s">' . esc_html__("Edit", "xwcpos") . '</a>', admin_url('post.php?post=' . $item->wc_prod_id . '&action=edit')),
+                        'Edit' => sprintf('<a href="%s" title="Edit product in WooCommerce">' . esc_html__("Edit", "xwcpos") . '</a>', admin_url('post.php?post=' . $item->wc_prod_id . '&action=edit')),
                     );
                     unset($actions['import_and_sync']);
                     unset($actions['import']);
@@ -447,14 +737,13 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 }
             }
 
+            // Show only the appropriate sync action based on current status
             if ($item->product_is_synced == 1) {
-
-                $edit = array(
-                    'not_sync' => sprintf('<a href="%s=%s">' . esc_html__("Not Sync", "xwcpos") . '</a>', $base_url, 'not_sync'),
-                );
-                unset($actions['sync']);
-                $actions = $edit + $actions;
-
+                // Product is currently enabled for sync, show disable option
+                unset($actions['enable_sync']);
+            } else {
+                // Product is currently disabled for sync, show enable option
+                unset($actions['disable_sync']);
             }
 
             return sprintf('%1$s %2$s', '<b>' . $this->xwcpos_namehtml($item) . '</b>', $this->row_actions($actions));
@@ -568,13 +857,14 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $auto_synced = $item->product_is_synced;
 
             if ($auto_synced == 1) {
-
-                return esc_html__('Yes', 'xwcpos');
+                return '<span class="xwcpos-sync-badge xwcpos-sync-enabled" title="This product is included in sync operations">
+                    <span class="dashicons dashicons-yes-alt"></span> Enabled
+                </span>';
             } else {
-                return esc_html__('No', 'xwcpos');
+                return '<span class="xwcpos-sync-badge xwcpos-sync-disabled" title="This product is excluded from sync operations">
+                    <span class="dashicons dashicons-dismiss"></span> Disabled
+                </span>';
             }
-
-            return '';
         }
 
         public function get_sortable_columns()
@@ -591,13 +881,153 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             return $sortable_columns;
         }
 
+        /**
+         * Get all categories for filter dropdown
+         */
+        protected function get_categories_for_filter()
+        {
+            global $wpdb;
+            $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
+
+            $categories = $wpdb->get_results(
+                "SELECT DISTINCT cat_id, name
+                 FROM $wpdb->xwcpos_item_categories
+                 WHERE name IS NOT NULL AND name != ''
+                 ORDER BY name ASC"
+            );
+
+            return $categories;
+        }
+
+        /**
+         * Display extra table navigation (filters)
+         */
+        protected function extra_tablenav($which)
+        {
+            if ($which !== 'top') {
+                return;
+            }
+
+            $categories = $this->get_categories_for_filter();
+            $current_category = isset($_REQUEST['filter_category']) ? $_REQUEST['filter_category'] : 'all';
+            $current_import_status = isset($_REQUEST['filter_import_status']) ? $_REQUEST['filter_import_status'] : 'all';
+            $current_sync_status = isset($_REQUEST['filter_sync_status']) ? $_REQUEST['filter_sync_status'] : 'all';
+            $current_stock_status = isset($_REQUEST['filter_stock_status']) ? $_REQUEST['filter_stock_status'] : 'all';
+            $current_price_min = isset($_REQUEST['filter_price_min']) ? $_REQUEST['filter_price_min'] : '';
+            $current_price_max = isset($_REQUEST['filter_price_max']) ? $_REQUEST['filter_price_max'] : '';
+            ?>
+            <div class="alignleft actions">
+                <style>
+                    .xwcpos-filters-wrapper {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 8px;
+                        align-items: center;
+                        margin-bottom: 10px;
+                    }
+                    .xwcpos-filter-group {
+                        display: flex;
+                        align-items: center;
+                        gap: 5px;
+                    }
+                    .xwcpos-filter-group label {
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: #555;
+                    }
+                    .xwcpos-filter-group select,
+                    .xwcpos-filter-group input[type="number"] {
+                        min-width: 140px;
+                    }
+                    .xwcpos-price-range {
+                        display: flex;
+                        align-items: center;
+                        gap: 5px;
+                    }
+                    .xwcpos-price-range input {
+                        width: 80px;
+                    }
+                </style>
+
+                <div class="xwcpos-filters-wrapper">
+                    <!-- Category Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label for="filter-category"><?php esc_html_e('Category:', 'xwcpos'); ?></label>
+                        <select name="filter_category" id="filter-category">
+                            <option value="all" <?php selected($current_category, 'all'); ?>><?php esc_html_e('All Categories', 'xwcpos'); ?></option>
+                            <?php foreach ($categories as $category): ?>
+                                <option value="<?php echo esc_attr($category->cat_id); ?>" <?php selected($current_category, $category->cat_id); ?>>
+                                    <?php echo esc_html($category->name); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <!-- Import Status Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label for="filter-import-status"><?php esc_html_e('Import Status:', 'xwcpos'); ?></label>
+                        <select name="filter_import_status" id="filter-import-status">
+                            <option value="all" <?php selected($current_import_status, 'all'); ?>><?php esc_html_e('All Products', 'xwcpos'); ?></option>
+                            <option value="imported" <?php selected($current_import_status, 'imported'); ?>><?php esc_html_e('Imported', 'xwcpos'); ?></option>
+                            <option value="not_imported" <?php selected($current_import_status, 'not_imported'); ?>><?php esc_html_e('Not Imported', 'xwcpos'); ?></option>
+                        </select>
+                    </div>
+
+                    <!-- Sync Status Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label for="filter-sync-status"><?php esc_html_e('Sync Status:', 'xwcpos'); ?></label>
+                        <select name="filter_sync_status" id="filter-sync-status">
+                            <option value="all" <?php selected($current_sync_status, 'all'); ?>><?php esc_html_e('All', 'xwcpos'); ?></option>
+                            <option value="synced" <?php selected($current_sync_status, 'synced'); ?>><?php esc_html_e('Synced', 'xwcpos'); ?></option>
+                            <option value="not_synced" <?php selected($current_sync_status, 'not_synced'); ?>><?php esc_html_e('Not Synced', 'xwcpos'); ?></option>
+                        </select>
+                    </div>
+
+                    <!-- Stock Status Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label for="filter-stock-status"><?php esc_html_e('Stock:', 'xwcpos'); ?></label>
+                        <select name="filter_stock_status" id="filter-stock-status">
+                            <option value="all" <?php selected($current_stock_status, 'all'); ?>><?php esc_html_e('All Stock', 'xwcpos'); ?></option>
+                            <option value="in_stock" <?php selected($current_stock_status, 'in_stock'); ?>><?php esc_html_e('In Stock', 'xwcpos'); ?></option>
+                            <option value="low_stock" <?php selected($current_stock_status, 'low_stock'); ?>><?php esc_html_e('Low Stock (≤5)', 'xwcpos'); ?></option>
+                            <option value="out_of_stock" <?php selected($current_stock_status, 'out_of_stock'); ?>><?php esc_html_e('Out of Stock', 'xwcpos'); ?></option>
+                        </select>
+                    </div>
+
+                    <!-- Price Range Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label><?php esc_html_e('Price:', 'xwcpos'); ?></label>
+                        <div class="xwcpos-price-range">
+                            <input type="number" name="filter_price_min" placeholder="Min" step="0.01" min="0" value="<?php echo esc_attr($current_price_min); ?>" />
+                            <span>-</span>
+                            <input type="number" name="filter_price_max" placeholder="Max" step="0.01" min="0" value="<?php echo esc_attr($current_price_max); ?>" />
+                        </div>
+                    </div>
+
+                    <!-- Filter Button -->
+                    <input type="submit" name="filter_action" id="post-query-submit" class="button" value="<?php esc_attr_e('Filter', 'xwcpos'); ?>" />
+
+                    <!-- Clear Filters Button -->
+                    <?php if (!empty($_REQUEST['filter_category']) || !empty($_REQUEST['filter_import_status']) ||
+                              !empty($_REQUEST['filter_sync_status']) || !empty($_REQUEST['filter_stock_status']) ||
+                              !empty($_REQUEST['filter_price_min']) || !empty($_REQUEST['filter_price_max']) ||
+                              !empty($_REQUEST['s'])): ?>
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=xwcpos-integration-products')); ?>" class="button">
+                            <?php esc_html_e('Clear Filters', 'xwcpos'); ?>
+                        </a>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <?php
+        }
+
         public function get_bulk_actions()
         {
             $actions = [
                 'import_and_sync' => 'Import & Sync',
                 'import' => 'Import',
-                'sync' => 'Sync',
-                'not_sync' => 'Not Sync',
+                'enable_sync' => 'Enable Sync',
+                'disable_sync' => 'Disable Sync',
                 'update' => 'Update',
                 'delete' => 'Delete',
             ];
@@ -712,9 +1142,9 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
                 case 'import_sync':
                     return $this->xwcpos_process_single_import($item_id, 'single', true);
-                case 'sync':
+                case 'enable_sync':
                     return $this->xwcpos_process_single_sync($item_id, true, 'single');
-                case 'not_sync':
+                case 'disable_sync':
                     return $this->xwcpos_process_single_sync($item_id, false, 'single');
                 case 'import':
                     return $this->xwcpos_process_single_import($item_id, 'single', false);
@@ -829,7 +1259,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             if($item->sku != null){
               $product->set_sku($item->sku);
             }
-            $product->set_short_description(isset($item->product_description) ? $item->product_description : '');
+            // Use long description instead of short description (standardized)
+            $product->set_description(isset($item->product_description) ? $item->product_description : '');
             $product->set_price($item->amount);
             $product->set_status('draft');
             $product->save();
@@ -939,11 +1370,19 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
             $item = apply_filters('xwcpos_import_ls_result_matrix_product', $item);
 
+            // Standardized description logic: use online_description if available, otherwise description
+            $description = '';
+            if (!empty($item->online_description) && $item->online_description !== "") {
+                $description = $item->online_description;
+            } else if (!empty($item->product_description)) {
+                $description = $item->product_description;
+            }
+
             $matrix_product_data = array(
                 'post_author' => get_current_user_id(),
                 'post_title' => isset($item->product_name) ? $item->product_name : '',
-                'post_content' => isset($item->item_e_commerce->long_description) ? $item->item_e_commerce->long_description : '',
-                'post_excerpt' => isset($item->item_e_commerce->short_description) ? $item->item_e_commerce->short_description : '',
+                'post_content' => $description, // Use standardized description for long description
+                'post_excerpt' => '', // Don't populate short description
                 'post_status' => 'publish',
                 'post_type' => 'product',
             );
@@ -1590,9 +2029,9 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 );
 
                 if ($importType == 'single') {
-
+                    $status_text = $synced ? 'enabled' : 'disabled';
                     $xwcpos_message = '<div id="message" class="updated notice notice-success is-dismissible">
-					          <p>Item successfully Synced!</p></div>';
+					          <p>Sync successfully ' . $status_text . ' for this product!</p></div>';
                     echo wp_kses(__($xwcpos_message, 'xwcpos'), $allowed_tags);
                 }
             } else {
@@ -1602,29 +2041,54 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
         public function xwcpos_process_single_update($item_id, $importType)
         {
+            try {
+                $item = $this->xwcpos_get_sing_item($item_id);
 
-            $item = $this->xwcpos_get_sing_item($item_id);
-            $result = $this->update_xwcpos_product($item, $importType);
-            return $result;
+                if (!$item) {
+                    throw new Exception("Product not found in database (ID: {$item_id})");
+                }
+
+                // Fetch fresh data from Kounta API for complete product information
+                $kounta_product = $this->fetch_kounta_product_by_id($item->product_ls_id);
+
+                if (!$kounta_product) {
+                    $this->plugin_log("[UPDATE ERROR] Failed to fetch product from Kounta API (item_id: {$item->product_ls_id})");
+                    // Continue with update using database data only
+                }
+
+                $result = $this->update_xwcpos_product($item, $kounta_product, $importType);
+                return $result;
+            } catch (Exception $e) {
+                $this->plugin_log("[UPDATE ERROR] " . $e->getMessage());
+                $this->plugin_log("[UPDATE ERROR] Stack trace: " . $e->getTraceAsString());
+
+                $allowed_tags = array(
+                    'div' => array('class' => array(), 'id' => array()),
+                    'p' => array(),
+                    'strong' => array(),
+                );
+
+                $error_message = '<div id="message" class="error notice is-dismissible">
+                    <p><strong>Update Failed:</strong> ' . esc_html($e->getMessage()) . '</p>
+                    <p>Check the log file for more details: wp-content/uploads/brewhq-kounta.log</p>
+                </div>';
+                echo wp_kses($error_message, $allowed_tags);
+
+                return false;
+            }
 
         }
 
-        public function update_xwcpos_product($item, $importType)
+        public function update_xwcpos_product($item, $kounta_product, $importType)
         {
 
-            //$result = $this->update_product_via_api($item);
-           //$this->update_wc_product_stock();
-            //if ($result > 0) {
-
-                if ($item->wc_prod_id > 0) {
-                    //$item = $this->xwcpos_get_sing_item($result);
-                    $this->xwcpos_update_woocommerce_product($item, $importType);
-                }
-            //}
+            if ($item->wc_prod_id > 0) {
+                $this->xwcpos_update_woocommerce_product($item, $kounta_product, $importType);
+            }
 
         }
 
-        public function xwcpos_update_woocommerce_product($item, $importType)
+        public function xwcpos_update_woocommerce_product($item, $kounta_product, $importType)
         {
 
             $variations_update = true;
@@ -1665,19 +2129,19 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                     $xwcpos_message = '<div id="message" class="updated notice is-dismissible">
 					            <p>Item updated successfully!!</p></div>';
                     echo wp_kses(__($xwcpos_message, 'xwcpos'), $allowed_tags);
-                    return $this->update_woocommerce_single_item($item);
+                    return $this->update_woocommerce_single_item($item, $kounta_product);
                 } else if ($item->product_ls_id > 0 && $item->product_matrix_item_id > 0) {
                     //single variation
                     $xwcpos_message = '<div id="message" class="updated notice is-dismissible">
 					            <p>Item updated successfully!!</p></div>';
                     echo wp_kses(__($xwcpos_message, 'xwcpos'), $allowed_tags);
-                    return $this->update_woocommerce_single_item($item);
+                    return $this->update_woocommerce_single_item($item, $kounta_product);
                 } else if ((is_null($item->product_ls_id) || $item->product_ls_id == 0) && $item->product_matrix_item_id > 0) {
                     //matrix item
                     $xwcpos_message = '<div id="message" class="updated notice is-dismissible">
 					            <p>Item updated successfully!!</p></div>';
                     echo wp_kses(__($xwcpos_message, 'xwcpos'), $allowed_tags);
-                    return $this->update_woocommerce_matrix_item($item, $variations_update);
+                    return $this->update_woocommerce_matrix_item($item, $kounta_product, $variations_update);
                 } else {
                     $xwcpos_message = '<div id="message" class="error notice is-dismissible">
 					            <p>Could not process update, invalid product!</p></div>';
@@ -1687,32 +2151,55 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             //}
         }
 
-        public function update_woocommerce_single_item($item)
+        public function update_woocommerce_single_item($item, $kounta_product = null)
         {
 
             $post_id = isset($item->wc_prod_id) ? $item->wc_prod_id : 0;
             if ($post_id > 0) {
 
-                $single_product_data = array(
-                    'ID' => $item->wc_prod_id,
-                    //'post_title' => empty($item->product_name) ? null : $item->product_name,
-                    //'post_content' => empty($item->item_e_commerce->long_description) ? null : $item->item_e_commerce->long_description,
-                    //'post_excerpt' => empty($item->item_e_commerce->short_description) ? null : $item->item_e_commerce->short_description,
-                );
+                // Update title if sync is enabled and we have Kounta data
+                if ($kounta_product && get_option('xwcpos_sync_titles', true)) {
+                    $kounta_name = sanitize_text_field($kounta_product->name);
+                    $current_title = get_the_title($post_id);
 
-                foreach ($single_product_data as $key => $val) {
-                    if (is_null($val)) {
-                        unset($single_product_data[$key]);
+                    if ($current_title !== $kounta_name) {
+                        wp_update_post(array(
+                            'ID' => $post_id,
+                            'post_title' => $kounta_name,
+                        ));
+                        $this->plugin_log("[UPDATE] Title updated for product {$post_id}: '{$current_title}' → '{$kounta_name}'");
                     }
                 }
 
-                $post_update_fields = apply_filters('xwcpos_update_post_fields_single_item', $single_product_data, $post_id);
-                if (!empty($post_update_fields)) {
-                    wp_update_post($post_update_fields);
+                // Update price if sync is enabled and we have Kounta data
+                if ($kounta_product && get_option('xwcpos_sync_prices', true)) {
+                    // Get site data for price
+                    $site_data = null;
+                    if (!empty($kounta_product->sites) && is_array($kounta_product->sites)) {
+                        $site_data = $kounta_product->sites[0];
+                    }
+
+                    if ($site_data && isset($site_data->unit_price)) {
+                        $kounta_price = floatval($site_data->unit_price);
+                        $product = wc_get_product($post_id);
+
+                        if ($product) {
+                            $current_price = floatval($product->get_regular_price());
+
+                            if ($current_price !== $kounta_price) {
+                                $product->set_regular_price($kounta_price);
+                                $product->set_price($kounta_price);
+                                $product->save();
+                                $this->plugin_log("[UPDATE] Price updated for product {$post_id}: {$current_price} → {$kounta_price}");
+                            }
+                        }
+                    }
                 }
 
                 //Update categories/tags
                 $this->xwcpos_add_product_taxonomy($item, $post_id);
+
+                // Update stock and other meta fields
                 $fields = apply_filters('xwcpos_update_post_meta_single_product', $this->map_kounta_fields($item, false, true), $post_id,);
                 if (!empty($fields)) {
                     foreach ($fields as $field_key => $value) {
@@ -1720,19 +2207,44 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                     }
                 }
 
-                //Update woocommerce product image
-                // $product_images = $this->add_kounta_product_images($item);
-                // $product_images = apply_filters('xwcpos_import_product_images_single_product', $product_images, $post_id);
-                // if (count($product_images) > 0) {
-                //     if (!empty($product_images)) {
-                //         set_post_thumbnail($post_id, $product_images[0]);
-                //         unset($product_images[0]);
-                //         update_post_meta($post_id, '_product_image_gallery', implode(',', $product_images));
-                //     } else {
-                //         delete_post_thumbnail($post_id);
-                //         update_post_meta($post_id, '_product_image_gallery', '');
-                //     }
-                // }
+                // Update images if sync is enabled and we have Kounta data
+                $sync_images_enabled = get_option('xwcpos_sync_images', true);
+                $this->plugin_log("[UPDATE] Image sync setting: " . ($sync_images_enabled ? 'enabled' : 'disabled'));
+                $this->plugin_log("[UPDATE] Kounta product available: " . ($kounta_product ? 'yes' : 'no'));
+
+                if ($kounta_product && $sync_images_enabled) {
+                    $this->plugin_log("[UPDATE] Attempting to sync images for product {$post_id}");
+                    require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-image-sync-service.php';
+                    $image_sync = new Kounta_Image_Sync_Service();
+                    // Respect the overwrite setting - FIXED: use correct option name
+                    $overwrite = get_option('xwcpos_overwrite_images', false);
+                    $this->plugin_log("[UPDATE] Image overwrite setting: " . ($overwrite ? 'enabled' : 'disabled'));
+                    $result = $image_sync->sync_product_images($post_id, $kounta_product, $overwrite);
+                    if ($result && isset($result['success'])) {
+                        $this->plugin_log("[UPDATE] Image sync result: " . ($result['success'] ? 'success' : 'failed') . " - " . $result['message']);
+                    }
+                } else {
+                    $this->plugin_log("[UPDATE] Skipping image sync - kounta_product: " . ($kounta_product ? 'yes' : 'no') . ", setting: " . ($sync_images_enabled ? 'enabled' : 'disabled'));
+                }
+
+                // Update descriptions if sync is enabled and we have Kounta data
+                $sync_descriptions_enabled = get_option('xwcpos_sync_descriptions', true);
+                $this->plugin_log("[UPDATE] Description sync setting: " . ($sync_descriptions_enabled ? 'enabled' : 'disabled'));
+
+                if ($kounta_product && $sync_descriptions_enabled) {
+                    $this->plugin_log("[UPDATE] Attempting to sync descriptions for product {$post_id}");
+                    require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-description-sync-service.php';
+                    $description_sync = new Kounta_Description_Sync_Service();
+                    // Respect the overwrite setting - FIXED: use correct option name
+                    $overwrite = get_option('xwcpos_overwrite_descriptions', false);
+                    $this->plugin_log("[UPDATE] Description overwrite setting: " . ($overwrite ? 'enabled' : 'disabled'));
+                    $result = $description_sync->sync_product_description($post_id, $kounta_product, $overwrite);
+                    if ($result && isset($result['success'])) {
+                        $this->plugin_log("[UPDATE] Description sync result: " . ($result['success'] ? 'success' : 'failed') . " - " . $result['message']);
+                    }
+                } else {
+                    $this->plugin_log("[UPDATE] Skipping description sync - kounta_product: " . ($kounta_product ? 'yes' : 'no') . ", setting: " . ($sync_descriptions_enabled ? 'enabled' : 'disabled'));
+                }
 
                 if ($item->product_ls_id > 0 ) {
 
@@ -1748,27 +2260,46 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
         }
 
-        public function update_woocommerce_matrix_item($item, $variations_update = true)
+        public function update_woocommerce_matrix_item($item, $kounta_product = null, $variations_update = true)
         {
 
             $post_id = isset($item->wc_prod_id) ? $item->wc_prod_id : 0;
             if ($post_id > 0) {
 
-                $matrix_fields = array(
-                    'ID' => $post_id,
-                    'post_title' => empty($item->product_name) ? null : $item->product_name,
-                    'post_content' => empty($item->item_e_commerce->long_description) ? null : $item->item_e_commerce->long_description,
-                    'post_excerpt' => empty($item->item_e_commerce->short_description) ? null : $item->item_e_commerce->short_description,
-                );
+                // Update title if sync is enabled and we have Kounta data
+                if ($kounta_product && get_option('xwcpos_sync_titles', true)) {
+                    $kounta_name = sanitize_text_field($kounta_product->name);
+                    $current_title = get_the_title($post_id);
 
-                foreach ($matrix_fields as $key => $val) {
-                    if (is_null($val)) {
-                        unset($matrix_fields[$key]);
+                    if ($current_title !== $kounta_name) {
+                        wp_update_post(array(
+                            'ID' => $post_id,
+                            'post_title' => $kounta_name,
+                        ));
+                        $this->plugin_log("[UPDATE] Title updated for matrix product {$post_id}: '{$current_title}' → '{$kounta_name}'");
                     }
                 }
 
+                // Update descriptions if sync is enabled and we have Kounta data
+                if ($kounta_product && get_option('xwcpos_sync_descriptions', true)) {
+                    require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-description-sync-service.php';
+                    $description_sync = new Kounta_Description_Sync_Service();
+                    // Respect the overwrite setting - FIXED: use correct option name
+                    $overwrite = get_option('xwcpos_overwrite_descriptions', false);
+                    $description_sync->sync_product_description($post_id, $kounta_product, $overwrite);
+                }
+
+                // Update images if sync is enabled and we have Kounta data
+                if ($kounta_product && get_option('xwcpos_sync_images', true)) {
+                    require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-image-sync-service.php';
+                    $image_sync = new Kounta_Image_Sync_Service();
+                    // Respect the overwrite setting - FIXED: use correct option name
+                    $overwrite = get_option('xwcpos_overwrite_images', false);
+                    $image_sync->sync_product_images($post_id, $kounta_product, $overwrite);
+                }
+
                 $post_id = wp_update_post(
-                    apply_filters('xwcpos_update_post_fields_matrix_product', $matrix_fields)
+                    apply_filters('xwcpos_update_post_fields_matrix_product', array('ID' => $post_id))
                 );
 
                 if (!is_wp_error($post_id)) {
@@ -2168,11 +2699,11 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 $this->xwcpos_process_bulk_import(false);
             }
 
-            if ($this->current_action() == 'sync') {
+            if ($this->current_action() == 'enable_sync') {
                 $this->xwcpos_process_bulk_sync(true);
             }
 
-            if ($this->current_action() == 'not_sync') {
+            if ($this->current_action() == 'disable_sync') {
                 $this->xwcpos_process_bulk_sync(false);
             }
 
@@ -2280,8 +2811,9 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
 
                 }
 
+                $status_text = $sync ? 'enabled' : 'disabled';
                 $xwcpos_message = '<div id="message" class="updated notice notice-success is-dismissible">
-					<p>' . $count . ' Item(s) successfully synced!</p></div>';
+					<p>Sync successfully ' . $status_text . ' for ' . $count . ' product(s)!</p></div>';
                 echo wp_kses(__($xwcpos_message, 'xwcpos'), $allowed_tags);
 
             }
