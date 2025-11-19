@@ -160,11 +160,26 @@ class Kounta_Rate_Limiter {
         // Empty the bucket
         $this->tokens = 0;
         $this->save_state();
-        
-        // Wait for the specified time or default
-        $wait_seconds = $retry_after ? (int)$retry_after : $this->time_window;
+
+        // Determine wait time
+        // If Retry-After header is provided, use it
+        // Otherwise, use a conservative default (2 seconds instead of full time window)
+        if ($retry_after) {
+            $wait_seconds = (int)$retry_after;
+        } else {
+            // Default to 2 seconds - enough time for rate limit to reset
+            // without waiting the full 60 second window
+            $wait_seconds = 2;
+        }
+
+        // Log the wait time for debugging
+        error_log(sprintf(
+            '[Kounta Rate Limiter] Rate limit hit, waiting %d seconds before retry',
+            $wait_seconds
+        ));
+
         sleep($wait_seconds);
-        
+
         // Refill after waiting
         $this->refill_tokens();
     }

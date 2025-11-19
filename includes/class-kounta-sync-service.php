@@ -164,10 +164,16 @@ class Kounta_Sync_Service {
      * @param string $message Message to log
      */
     private function log($message) {
-        if (class_exists('BrewHQ_Kounta_POS_Int')) {
-            $plugin = new BrewHQ_Kounta_POS_Int();
-            $plugin->plugin_log('[Optimized Sync] ' . $message);
-        }
+        // Use WordPress uploads directory for logging
+        // Avoid creating new plugin instances which can cause duplicate behavior
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/brewhq-kounta.log';
+
+        // Format: timestamp::[Optimized Sync] message
+        $log_entry = current_time('mysql') . '::[Optimized Sync] ' . $message . "\n";
+
+        // Append to log file
+        error_log($log_entry, 3, $log_file);
 
         // Also log to PHP error log if WP_DEBUG is enabled
         if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -224,31 +230,83 @@ class Kounta_Sync_Service {
         $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
         
         // Get products that need syncing
-        $query = "SELECT * FROM {$wpdb->xwcpos_items} 
-                  WHERE xwcpos_last_sync_date > 0 
+        // Group by item_id to avoid processing duplicates
+        $query = "SELECT * FROM {$wpdb->xwcpos_items}
+                  WHERE xwcpos_last_sync_date > 0
                   AND wc_prod_id IS NOT NULL
+                  GROUP BY item_id
                   ORDER BY xwcpos_last_sync_date ASC";
-        
+
         if ($limit > 0) {
             $query .= " LIMIT " . intval($limit);
         }
-        
+
         $products = $wpdb->get_results($query);
-        
+
+        // Log if we found any products
+        $this->log(sprintf('Found %d products to sync', count($products)));
+
+        $total_products = count($products);
         $updated_count = 0;
         $skipped_count = 0;
         $error_count = 0;
-        
+
+        // Initialize progress tracking
+        $this->update_progress(array(
+            'active' => true,
+            'phase' => 'Syncing products...',
+            'percent' => 0,
+            'current' => 0,
+            'total' => $total_products,
+        ));
+
         // Process in batches
         $batches = array_chunk($products, $this->batch_size);
-        
-        foreach ($batches as $batch) {
+        $batch_count = count($batches);
+
+        foreach ($batches as $batch_index => $batch) {
+            $this->log(sprintf(
+                'Processing batch %d of %d (%d products)',
+                $batch_index + 1,
+                $batch_count,
+                count($batch)
+            ));
+
             $batch_result = $this->process_product_batch($batch, $refresh_time, $site_id);
             $updated_count += $batch_result['updated'];
             $skipped_count += $batch_result['skipped'];
             $error_count += $batch_result['errors'];
+
+            // Update progress
+            $processed = ($batch_index + 1) * $this->batch_size;
+            if ($processed > $total_products) {
+                $processed = $total_products;
+            }
+            $percent = $total_products > 0 ? round(($processed / $total_products) * 100) : 0;
+
+            $this->update_progress(array(
+                'active' => true,
+                'phase' => 'Syncing products...',
+                'percent' => $percent,
+                'current' => $processed,
+                'total' => $total_products,
+                'batch_info' => sprintf('Batch %d of %d', $batch_index + 1, $batch_count),
+            ));
+
+            // Add a small delay between batches to help with rate limiting
+            // Only if there are more batches to process
+            if ($batch_index < $batch_count - 1) {
+                usleep(500000); // 0.5 second delay between batches
+            }
         }
-        
+
+        // Clear progress on completion
+        $this->update_progress(array(
+            'active' => false,
+            'phase' => 'Complete',
+            'percent' => 100,
+        ));
+
         $end_time = microtime(true);
         $duration = $end_time - $start_time;
 
@@ -357,6 +415,7 @@ class Kounta_Sync_Service {
 
         // Get Kounta product data
         $endpoint = 'companies/' . $this->api_client->get_account_id() . '/products/' . $item->item_id;
+        $this->log(sprintf('Syncing product: item_id=%s, wc_prod_id=%s', $item->item_id, $item->wc_prod_id ?? 'none'));
         $k_product = $this->api_client->make_request($endpoint);
 
         if (is_wp_error($k_product)) {
@@ -389,9 +448,14 @@ class Kounta_Sync_Service {
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
 
             $stock_value = $site_data->stock ?? 0;
+
+            // Try to update first
             $result = $wpdb->update(
                 $wpdb->xwcpos_item_shops,
-                array('qoh' => $stock_value),
+                array(
+                    'qoh' => $stock_value,
+                    'updated_at' => current_time('mysql')
+                ),
                 array(
                     'xwcpos_item_id' => $item->id,
                     'shop_id' => $site_id,
@@ -402,61 +466,121 @@ class Kounta_Sync_Service {
             if ($result === false) {
                 $this->log('ERROR: Failed to update stock for item ' . $item->id . ' in database - ' . $wpdb->last_error);
             } elseif ($result === 0) {
-                $this->log('WARNING: Stock update for item ' . $item->id . ' affected 0 rows (may not exist in item_shops table)');
+                // Record doesn't exist, insert it
+                $this->log('INFO: Stock record not found for item ' . $item->id . ', creating new record');
+
+                $insert_result = $wpdb->insert(
+                    $wpdb->xwcpos_item_shops,
+                    array(
+                        'xwcpos_item_id' => $item->id,
+                        'shop_id' => $site_id,
+                        'qoh' => $stock_value,
+                        'item_id' => $item->item_id,
+                        'created_at' => current_time('mysql'),
+                        'updated_at' => current_time('mysql')
+                    ),
+                    array('%d', '%d', '%d', '%s', '%s', '%s')
+                );
+
+                if ($insert_result === false) {
+                    $this->log('ERROR: Failed to insert stock record for item ' . $item->id . ' - ' . $wpdb->last_error);
+                } else {
+                    $this->log('SUCCESS: Created stock record for item ' . $item->id . ' with stock ' . $stock_value);
+                }
             }
 
-            // Update WooCommerce stock
+            // Update WooCommerce stock metadata
             if ($item->wc_prod_id) {
-                $meta_result = update_post_meta($item->wc_prod_id, '_stock', $stock_value);
-                if ($meta_result === false) {
-                    $this->log('ERROR: Failed to update WooCommerce stock meta for product ' . $item->wc_prod_id);
+                // Use WooCommerce's proper stock management functions
+                $product = wc_get_product($item->wc_prod_id);
+
+                if ($product) {
+                    // Set stock quantity
+                    $product->set_stock_quantity($stock_value);
+                    $product->set_manage_stock(true);
+
+                    // Set stock status based on quantity
+                    if ($stock_value > 0) {
+                        $product->set_stock_status('instock');
+                    } else {
+                        $product->set_stock_status('outofstock');
+                    }
+
+                    // Save the product
+                    $save_result = $product->save();
+
+                    if (!$save_result) {
+                        $this->log('ERROR: Failed to save WooCommerce stock for product ' . $item->wc_prod_id);
+                    }
+                } else {
+                    $this->log('ERROR: Could not load WooCommerce product ' . $item->wc_prod_id);
                 }
             }
         }
 
-        // Sync price if enabled
+        // Sync price if enabled (check both global setting and per-product override)
         if ($item->wc_prod_id && $site_data && get_option('xwcpos_sync_prices', true)) {
-            try {
-                $this->sync_product_price($item, $site_data, $k_product);
-            } catch (Exception $e) {
-                $this->log('ERROR: Exception during price sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+            $disable_price_sync = get_post_meta($item->wc_prod_id, '_xwcpos_disable_price_sync', true);
+            if ($disable_price_sync === 'yes') {
+                $this->log('Skipping price sync for product ' . $item->wc_prod_id . ' (per-product override enabled)');
+            } else {
+                try {
+                    $this->sync_product_price($item, $site_data, $k_product);
+                } catch (Exception $e) {
+                    $this->log('ERROR: Exception during price sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+                }
             }
         }
 
-        // Sync title/name if enabled
+        // Sync title/name if enabled (check both global setting and per-product override)
         if ($item->wc_prod_id && get_option('xwcpos_sync_titles', true)) {
-            try {
-                $this->sync_product_title($item, $k_product);
-            } catch (Exception $e) {
-                $this->log('ERROR: Exception during title sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+            $disable_title_sync = get_post_meta($item->wc_prod_id, '_xwcpos_disable_title_sync', true);
+            if ($disable_title_sync === 'yes') {
+                $this->log('Skipping title sync for product ' . $item->wc_prod_id . ' (per-product override enabled)');
+            } else {
+                try {
+                    $this->sync_product_title($item, $k_product);
+                } catch (Exception $e) {
+                    $this->log('ERROR: Exception during title sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
+                }
             }
         }
 
-        // Sync images if enabled
+        // Sync images if enabled (check both global setting and per-product override)
         if ($item->wc_prod_id && get_option('xwcpos_sync_images', true)) {
-            try {
-                $overwrite = get_option('xwcpos_overwrite_images', false);
-                $image_result = $this->image_sync->sync_product_images($item->wc_prod_id, $k_product, $overwrite);
+            $disable_image_sync = get_post_meta($item->wc_prod_id, '_xwcpos_disable_image_sync', true);
+            if ($disable_image_sync === 'yes') {
+                $this->log('Skipping image sync for product ' . $item->wc_prod_id . ' (per-product override enabled)');
+            } else {
+                try {
+                    $overwrite = get_option('xwcpos_overwrite_images', false);
+                    $image_result = $this->image_sync->sync_product_images($item->wc_prod_id, $k_product, $overwrite);
 
-                if (!$image_result['success'] && !isset($image_result['skipped'])) {
-                    $this->log('WARNING: Image sync failed for product ' . $item->wc_prod_id . ': ' . $image_result['message']);
+                    if (!$image_result['success'] && !isset($image_result['skipped'])) {
+                        $this->log('WARNING: Image sync failed for product ' . $item->wc_prod_id . ': ' . $image_result['message']);
+                    }
+                } catch (Exception $e) {
+                    $this->log('ERROR: Exception during image sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
                 }
-            } catch (Exception $e) {
-                $this->log('ERROR: Exception during image sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
             }
         }
 
-        // Sync descriptions if enabled
+        // Sync descriptions if enabled (check both global setting and per-product override)
         if ($item->wc_prod_id && get_option('xwcpos_sync_descriptions', true)) {
-            try {
-                $overwrite = get_option('xwcpos_overwrite_descriptions', false);
-                $desc_result = $this->description_sync->sync_product_description($item->wc_prod_id, $k_product, $overwrite);
+            $disable_description_sync = get_post_meta($item->wc_prod_id, '_xwcpos_disable_description_sync', true);
+            if ($disable_description_sync === 'yes') {
+                $this->log('Skipping description sync for product ' . $item->wc_prod_id . ' (per-product override enabled)');
+            } else {
+                try {
+                    $overwrite = get_option('xwcpos_overwrite_descriptions', false);
+                    $desc_result = $this->description_sync->sync_product_description($item->wc_prod_id, $k_product, $overwrite);
 
-                if (!$desc_result['success'] && !isset($desc_result['skipped'])) {
-                    $this->log('WARNING: Description sync failed for product ' . $item->wc_prod_id . ': ' . $desc_result['message']);
+                    if (!$desc_result['success'] && !isset($desc_result['skipped'])) {
+                        $this->log('WARNING: Description sync failed for product ' . $item->wc_prod_id . ': ' . $desc_result['message']);
+                    }
+                } catch (Exception $e) {
+                    $this->log('ERROR: Exception during description sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
                 }
-            } catch (Exception $e) {
-                $this->log('ERROR: Exception during description sync for product ' . $item->wc_prod_id . ': ' . $e->getMessage());
             }
         }
 
@@ -610,5 +734,14 @@ class Kounta_Sync_Service {
             'synced' => (int)($total - $needs_sync),
             'percent_complete' => $total > 0 ? round((($total - $needs_sync) / $total) * 100, 2) : 0,
         );
+    }
+
+    /**
+     * Update sync progress in transient for real-time UI updates
+     *
+     * @param array $progress Progress data
+     */
+    private function update_progress($progress) {
+        set_transient('xwcpos_sync_progress', $progress, 600); // 10 minute expiry
     }
 }

@@ -69,7 +69,7 @@ See **[BUILD.md](./BUILD.md)** for detailed deployment instructions.
 
 ### For Development
 
-See **[README-DEV.md](./README-DEV.md)** for local development setup.
+See **[Development Setup](./docs/README-DEV.md)** for local development setup.
 
 ## ⚙️ Configuration
 
@@ -93,21 +93,36 @@ See **[README-DEV.md](./README-DEV.md)** for local development setup.
 
 ### User Guides
 
-- **[Admin UI Guide](./ADMIN-UI-GUIDE.md)** - Using the admin interface
-- **[Debugging Guide](./DEBUGGING-GUIDE.md)** - Troubleshooting common issues
+- **[Admin UI Guide](./docs/ADMIN-UI-GUIDE.md)** - Using the admin interface
+- **[Debugging Guide](./docs/DEBUGGING-GUIDE.md)** - Troubleshooting common issues
+
+### Feature Documentation
+
+- **[Per-Product Sync Overrides](./docs/PER-PRODUCT-SYNC-OVERRIDES.md)** - Disable sync for specific fields on individual products
+- **[Progress Indicator](./docs/PROGRESS-INDICATOR.md)** - Real-time sync progress tracking
+- **[Image & Description Sync](./docs/IMAGE-DESCRIPTION-SYNC-PLAN.md)** - Image and description sync features
+- **[Order Logging](./docs/ORDER-LOGGING-IMPROVEMENTS.md)** - Order sync logging system
 
 ### Technical Documentation
 
-- **[Error Handling README](./ERROR-HANDLING-README.md)** - Error handling and logging overview
-- **[Performance Improvements](./PERFORMANCE-IMPROVEMENTS.md)** - Performance optimization details
-- **[Reliability Improvements](./RELIABILITY-IMPROVEMENTS.md)** - Retry logic and reliability features
-- **[Order Logging](./ORDER-LOGGING-IMPROVEMENTS.md)** - Order sync logging system
-- **[Image & Description Sync](./IMAGE-DESCRIPTION-SYNC-PLAN.md)** - Image and description sync features
+- **[Error Handling](./docs/ERROR-HANDLING-README.md)** - Error handling and logging overview
+- **[Performance Improvements](./docs/PERFORMANCE-IMPROVEMENTS.md)** - Performance optimization details
+- **[Reliability Improvements](./docs/RELIABILITY-IMPROVEMENTS.md)** - Retry logic and reliability features
+- **[Rate Limiting](./docs/RATE-LIMITING-IMPROVEMENTS.md)** - Smart rate limiting implementation
+- **[Stock Sync](./docs/STOCK-SYNC-IMPROVEMENTS.md)** - Stock synchronization improvements
+
+### Bug Fixes & Improvements
+
+- **[Duplicate Order Upload Fix](./docs/DUPLICATE-ORDER-UPLOAD-FIX.md)** - Fixed duplicate order uploads
+- **[Duplicate Request Fix](./docs/DUPLICATE-REQUEST-FIX.md)** - Fixed duplicate API requests
+- **[Sync Improvements Summary](./docs/SYNC-IMPROVEMENTS-SUMMARY.md)** - Recent sync improvements
+- **[UI Improvements Summary](./docs/UI-IMPROVEMENTS-SUMMARY.md)** - Admin UI enhancements
 
 ### Development
 
-- **[Development Setup](./README-DEV.md)** - Setting up local development environment
-- **[Roadmap](./ROADMAP.md)** - Future development plans and enhancements
+- **[Development Setup](./docs/README-DEV.md)** - Setting up local development environment
+- **[Roadmap](./docs/ROADMAP.md)** - Future development plans and enhancements
+- **[Documentation Index](./docs/DOCUMENTATION-INDEX.md)** - Complete documentation index
 
 ## 🔍 Quick Start
 
@@ -154,7 +169,7 @@ Orders are automatically uploaded when:
 - Check items exist in `xwcpos_item_shops` table
 - Review inventory sync logs
 
-See [DEBUGGING-GUIDE.md](./DEBUGGING-GUIDE.md) for detailed troubleshooting steps.
+See [Debugging Guide](./docs/DEBUGGING-GUIDE.md) for detailed troubleshooting steps.
 
 ## 📊 Logging
 

@@ -46,18 +46,23 @@ class Kounta_Description_Sync_Service {
         // Update long description (post_content) only
         if (!empty($description)) {
             $current_description = $product->get_description();
+            $sanitized_description = $this->sanitize_description($description);
 
             if ($overwrite || empty($current_description)) {
-                $this->log("Updating long description for product {$product_id} (overwrite: " . ($overwrite ? 'yes' : 'no') . ", current empty: " . (empty($current_description) ? 'yes' : 'no') . ")");
-                $sanitized_description = $this->sanitize_description($description);
+                // Check if description actually changed before updating
+                if ($current_description !== $sanitized_description) {
+                    $this->log("Updating long description for product {$product_id} (overwrite: " . ($overwrite ? 'yes' : 'no') . ", current empty: " . (empty($current_description) ? 'yes' : 'no') . ")");
 
-                wp_update_post(array(
-                    'ID' => $product_id,
-                    'post_content' => $sanitized_description,
-                ));
+                    wp_update_post(array(
+                        'ID' => $product_id,
+                        'post_content' => $sanitized_description,
+                    ));
 
-                $updated = true;
-                $this->log("Long description updated for product {$product_id}");
+                    $updated = true;
+                    $this->log("Long description updated for product {$product_id}");
+                } else {
+                    $this->log("Skipping long description for product {$product_id} (description unchanged)");
+                }
             } else {
                 $this->log("Skipping long description for product {$product_id} (overwrite disabled and description exists)");
             }
@@ -127,10 +132,16 @@ class Kounta_Description_Sync_Service {
      * @param string $message Message to log
      */
     private function log($message) {
-        if (class_exists('BrewHQ_Kounta_POS_Int')) {
-            $plugin = new BrewHQ_Kounta_POS_Int();
-            $plugin->plugin_log('[Description Sync] ' . $message);
-        }
+        // Use WordPress uploads directory for logging
+        // Avoid creating new plugin instances which can cause duplicate behavior
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/brewhq-kounta.log';
+
+        // Format: timestamp::[Description Sync] message
+        $log_entry = current_time('mysql') . '::[Description Sync] ' . $message . "\n";
+
+        // Append to log file
+        error_log($log_entry, 3, $log_file);
 
         // Also log to PHP error log if WP_DEBUG is enabled
         if (defined('WP_DEBUG') && WP_DEBUG) {

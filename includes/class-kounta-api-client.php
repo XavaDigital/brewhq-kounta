@@ -67,8 +67,13 @@ class Kounta_API_Client {
         $this->client_secret = esc_attr(get_option('xwcpos_client_secret'));
         $this->refresh_token = esc_attr(get_option('xwcpos_refresh_token'));
 
-        // Initialize rate limiter (60 requests per minute as default)
-        $this->rate_limiter = new Kounta_Rate_Limiter(60, 60);
+        // Initialize rate limiter
+        // Use 50 requests per minute to be conservative and avoid hitting limits
+        // Kounta's actual limit is 60/min, but we stay under to account for:
+        // - Multiple concurrent processes
+        // - Burst requests during batch operations
+        // - Network timing variations
+        $this->rate_limiter = new Kounta_Rate_Limiter(50, 60);
     }
 
     /**
@@ -167,8 +172,29 @@ class Kounta_API_Client {
         // Handle rate limiting
         if ($status_code === 429) {
             $retry_after = wp_remote_retrieve_header($response, 'Retry-After');
-            $this->log('WARNING: Rate limit hit (HTTP 429), retrying after: ' . ($retry_after ?: 'default delay'));
-            $this->rate_limiter->handle_rate_limit($retry_after);
+
+            // Parse Retry-After header (can be seconds or HTTP date)
+            $wait_seconds = null;
+            if ($retry_after) {
+                // Check if it's a number (seconds) or a date
+                if (is_numeric($retry_after)) {
+                    $wait_seconds = (int)$retry_after;
+                } else {
+                    // Try to parse as HTTP date
+                    $retry_time = strtotime($retry_after);
+                    if ($retry_time !== false) {
+                        $wait_seconds = max(0, $retry_time - time());
+                    }
+                }
+            }
+
+            $this->log(sprintf(
+                'WARNING: Rate limit hit (HTTP 429), waiting %d seconds before retry',
+                $wait_seconds ?: 2
+            ));
+
+            $this->rate_limiter->handle_rate_limit($wait_seconds);
+
             // Retry the request
             return $this->make_request($endpoint, $method, $params, $data);
         }
@@ -300,10 +326,16 @@ class Kounta_API_Client {
      * @param string $message Message to log
      */
     private function log($message) {
-        if (class_exists('BrewHQ_Kounta_POS_Int')) {
-            $plugin = new BrewHQ_Kounta_POS_Int();
-            $plugin->plugin_log('[API Client] ' . $message);
-        }
+        // Use WordPress uploads directory for logging
+        // Avoid creating new plugin instances which can cause duplicate behavior
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/brewhq-kounta.log';
+
+        // Format: timestamp::[API Client] message
+        $log_entry = current_time('mysql') . '::[API Client] ' . $message . "\n";
+
+        // Append to log file
+        error_log($log_entry, 3, $log_file);
 
         // Also log to PHP error log if WP_DEBUG is enabled
         if (defined('WP_DEBUG') && WP_DEBUG) {

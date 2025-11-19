@@ -20,6 +20,24 @@ if (!class_exists('BrewHQ_Kounta_POS_Import_Products')) {
 			<div class="output"></div>
       <div class="errosmessage error"></div>
 			<div class="success_message updated"></div>
+
+			<!-- Progress Indicator -->
+			<div id="xwcpos-sync-progress" style="display: none; margin: 20px 0; padding: 20px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px; box-shadow: 0 1px 1px rgba(0,0,0,.04);">
+				<div style="margin-bottom: 15px;">
+					<strong id="xwcpos-progress-title" style="font-size: 14px; color: #1d2327;">Syncing...</strong>
+					<span id="xwcpos-progress-stats" style="float: right; font-size: 13px; color: #646970;"></span>
+				</div>
+				<div style="background: #f0f0f1; border-radius: 4px; height: 24px; overflow: hidden; position: relative;">
+					<div id="xwcpos-progress-bar" style="background: linear-gradient(90deg, #00a32a 0%, #00ba37 100%); height: 100%; width: 0%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center;">
+						<span id="xwcpos-progress-percent" style="color: #fff; font-weight: 600; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,0.2);"></span>
+					</div>
+				</div>
+				<div id="xwcpos-progress-details" style="margin-top: 10px; font-size: 12px; color: #646970;">
+					<div id="xwcpos-progress-phase" style="margin-bottom: 5px;"></div>
+					<div id="xwcpos-progress-current"></div>
+				</div>
+			</div>
+
 			<div class="loadbtu">
 				<a href="javascript:void(0)" class="button button-primary button-large" onclick="xwcpos_importPros()"><?php echo esc_html__("Load Kounta Products", "xwcpos"); ?></a>
         <a href="javascript:void(0)" class="button button-primary button-large" onclick="xwcpos_syncAllProducts()"><?php echo esc_html__("Sync All Products", "xwcpos"); ?></a>

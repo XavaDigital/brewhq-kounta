@@ -142,11 +142,17 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
              *
              */
 
-            add_action('woocommerce_thankyou', array($this, 'xwcpos_add_order_to_kounta'), 9999);
-            //add_action('woocommerce_order_status_completed', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            // Upload orders to Kounta when status changes to on-hold or processing
+            // Note: Only using status change hooks to prevent duplicate uploads
             add_action('woocommerce_order_status_on-hold', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            add_action('woocommerce_order_status_processing', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            //add_action('woocommerce_order_status_completed', array($this, 'xwcpos_add_order_to_kounta'), 9999);
 
             add_action( 'init', array($this, 'script_enqueuer') );
+
+            // Add product sync override meta box
+            add_action('add_meta_boxes', array($this, 'xwcpos_add_sync_override_meta_box'));
+            add_action('woocommerce_process_product_meta', array($this, 'xwcpos_save_sync_override_meta'));
 
             /* Check cart items for current stock levels */
             // add_action('woocommerce_before_checkout_process', array($this, 'xwcpos_update_inventory_checkout'));
@@ -701,16 +707,53 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         public function xwcposSyncAllProdsCRON(){
-            $this->plugin_log('/**** CRON Process initiated: Sync all ****/ ');
-            // $to      = 'david@xavadigital.com';
-            // $subject = 'BrewHQ Inventory CRON';
-            // $message = 'The inventory CRON has executed';
-            // $headers = 'From: webmaster@brewhq.co.nz'       . "\r\n" .
-            //             'Reply-To: webmaster@brewhq.co.nz' . "\r\n" .
-            //             'X-Mailer: PHP/' . phpversion();
+            // Check if a sync is already running
+            $sync_lock = get_transient('xwcpos_sync_in_progress');
+            if ($sync_lock) {
+                $this->plugin_log('CRON: Sync already in progress, skipping. Lock info: ' . json_encode($sync_lock));
+                return;
+            }
 
-            // mail($to, $subject, $message, $headers);
-            $this->xwcposSyncAllProds();
+            $this->plugin_log('/**** CRON Process initiated: Optimized Sync ****/ ');
+
+            // Set lock with timestamp and source
+            $lock_info = array(
+                'started' => current_time('mysql'),
+                'source' => 'cron',
+            );
+            set_transient('xwcpos_sync_in_progress', $lock_info, 600); // 10 minute lock
+
+            // Use the new optimized sync instead of the old method
+            // This prevents duplicate API calls when CRON runs during manual sync
+            try {
+                $sync_service = new Kounta_Sync_Service();
+
+                // First sync inventory
+                $inventory_result = $sync_service->sync_inventory_optimized();
+
+                if (!$inventory_result['success']) {
+                    $this->plugin_log('CRON ERROR: Inventory sync failed - ' . $inventory_result['error']);
+                    delete_transient('xwcpos_sync_in_progress');
+                    return;
+                }
+
+                // Then sync products
+                $product_result = $sync_service->sync_products_optimized(0); // 0 = all products
+
+                $this->plugin_log(sprintf(
+                    'CRON: Optimized sync completed - %d products updated in %.2f seconds',
+                    $product_result['updated'],
+                    $product_result['duration']
+                ));
+
+                // Release lock after successful completion
+                delete_transient('xwcpos_sync_in_progress');
+
+            } catch (Exception $e) {
+                $this->plugin_log('CRON ERROR: ' . $e->getMessage());
+                // Release lock on error
+                delete_transient('xwcpos_sync_in_progress');
+            }
         }
 
         public function xwcposSyncAllProds()
@@ -1854,11 +1897,27 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         public function xwcpos_add_order_to_kounta($order_id){
+            // Use optimized order service with logging if available
+            $use_optimized = get_option('xwcpos_use_optimized_order_sync', true);
+            if ($use_optimized) {
+                return $this->xwcpos_add_order_to_kounta_optimized($order_id);
+            }
+
+            // Legacy order upload (no logging)
             $order=wc_get_order($order_id);
             $kounta_id = $order->get_meta('_kounta_id');
 
+            // Check if order is already being uploaded (prevent race condition)
+            $upload_lock = get_transient('xwcpos_uploading_order_' . $order_id);
+            if ($upload_lock) {
+                $this->plugin_log('Order ' . $order_id . ' is already being uploaded, skipping duplicate attempt');
+                return array('error' => true, 'error_type' => 'duplicate_upload_attempt', 'error_description' => 'Order is already being uploaded');
+            }
+
             if($kounta_id == null){
-                //if(true){
+                // Set upload lock (30 second timeout)
+                set_transient('xwcpos_uploading_order_' . $order_id, true, 30);
+
                 $order->add_order_note( 'Starting upload of Kounta order');
                 //find customer
                 $customerID = $this->get_kounta_customer($order);
@@ -1916,6 +1975,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                         $order->add_order_note( 'Order uploaded to Kounta. Order#:'.$result);
                         $response['success'] = true;
                         $response['order_id'] = $result;
+
+                        // Clear upload lock on success
+                        delete_transient('xwcpos_uploading_order_' . $order_id);
                         break;
                     } elseif(isset($result['error'])){
                         $order->add_order_note( 'Order failed to upload to Kounta. '.$result['error'].' '.$result['error_description'].'Order data: '.json_encode($order_data));
@@ -1932,9 +1994,14 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                         $order->add_order_note( 'All attempts failed. Email sent to David.');
                         $this->send_admin_error_email($order_id, $order_data);
                         //$order->add_order_note( 'Order data: '.json_encode($order_data));
+
+                        // Clear upload lock on failure
+                        delete_transient('xwcpos_uploading_order_' . $order_id);
                     }
                 }
 
+                // Clear upload lock if we exit the loop without success
+                delete_transient('xwcpos_uploading_order_' . $order_id);
 
             } else {
                 $order->add_order_note( 'Upload attempted. Order already exists. Order#:'.$kounta_id);
@@ -3151,6 +3218,25 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
          * Uses new Kounta_Sync_Service for improved performance
          */
         public function xwcposSyncAllProdsOptimized() {
+            // Check if a sync is already running
+            $sync_lock = get_transient('xwcpos_sync_in_progress');
+            if ($sync_lock) {
+                echo json_encode(array(
+                    'success' => false,
+                    'error' => 'A sync is already in progress. Please wait for it to complete.',
+                    'locked_by' => $sync_lock,
+                ));
+                wp_die();
+            }
+
+            // Set lock with timestamp and source
+            $lock_info = array(
+                'started' => current_time('mysql'),
+                'source' => 'manual_ajax',
+                'user_id' => get_current_user_id(),
+            );
+            set_transient('xwcpos_sync_in_progress', $lock_info, 600); // 10 minute lock
+
             try {
                 $sync_service = new Kounta_Sync_Service();
 
@@ -3158,6 +3244,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 $inventory_result = $sync_service->sync_inventory_optimized();
 
                 if (!$inventory_result['success']) {
+                    // Release lock before exiting
+                    delete_transient('xwcpos_sync_in_progress');
+
                     echo json_encode(array(
                         'success' => false,
                         'error' => $inventory_result['error'],
@@ -3175,6 +3264,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     $product_result['duration']
                 ));
 
+                // Release lock after successful completion
+                delete_transient('xwcpos_sync_in_progress');
+
                 echo json_encode(array(
                     'success' => true,
                     'inventory' => $inventory_result,
@@ -3187,6 +3279,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 ));
 
             } catch (Exception $e) {
+                // Release lock on error
+                delete_transient('xwcpos_sync_in_progress');
+
                 $this->plugin_log('Optimized sync error: ' . $e->getMessage());
                 echo json_encode(array(
                     'success' => false,
@@ -3228,20 +3323,30 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         /**
          * Get sync progress (AJAX handler)
+         * Returns real-time progress from transient during active sync
          */
         public function xwcposGetSyncProgress() {
             try {
-                $sync_service = new Kounta_Sync_Service();
-                $progress = $sync_service->get_sync_progress();
+                // Get real-time progress from transient (set during sync)
+                $progress = get_transient('xwcpos_sync_progress');
 
-                echo json_encode(array(
-                    'success' => true,
-                    'progress' => $progress,
-                ));
+                if ($progress && isset($progress['active']) && $progress['active']) {
+                    // Active sync in progress - return real-time data
+                    echo json_encode($progress);
+                } else {
+                    // No active sync - return overall sync status
+                    $sync_service = new Kounta_Sync_Service();
+                    $overall_progress = $sync_service->get_sync_progress();
+
+                    echo json_encode(array(
+                        'active' => false,
+                        'overall' => $overall_progress,
+                    ));
+                }
 
             } catch (Exception $e) {
                 echo json_encode(array(
-                    'success' => false,
+                    'active' => false,
                     'error' => $e->getMessage(),
                 ));
             }
@@ -3466,6 +3571,124 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             ));
 
             wp_die();
+        }
+
+        /**
+         * Add meta box for Kounta sync overrides on product edit page
+         */
+        public function xwcpos_add_sync_override_meta_box() {
+            add_meta_box(
+                'xwcpos_sync_overrides',
+                'Kounta Sync Overrides',
+                array($this, 'xwcpos_render_sync_override_meta_box'),
+                'product',
+                'side',
+                'default'
+            );
+        }
+
+        /**
+         * Render the sync override meta box
+         */
+        public function xwcpos_render_sync_override_meta_box($post) {
+            // Add nonce for security
+            wp_nonce_field('xwcpos_sync_override_meta_box', 'xwcpos_sync_override_nonce');
+
+            // Get current values
+            $disable_image = get_post_meta($post->ID, '_xwcpos_disable_image_sync', true);
+            $disable_description = get_post_meta($post->ID, '_xwcpos_disable_description_sync', true);
+            $disable_title = get_post_meta($post->ID, '_xwcpos_disable_title_sync', true);
+            $disable_price = get_post_meta($post->ID, '_xwcpos_disable_price_sync', true);
+
+            ?>
+            <div class="xwcpos-sync-overrides">
+                <p style="margin-bottom: 15px; color: #646970; font-size: 13px;">
+                    Check any option below to prevent Kounta from updating that field on this product,
+                    even if global sync settings are enabled.
+                </p>
+
+                <p>
+                    <label style="display: block; margin-bottom: 8px;">
+                        <input type="checkbox" name="_xwcpos_disable_image_sync" value="yes" <?php checked($disable_image, 'yes'); ?> />
+                        <strong>Disable Image Sync</strong>
+                    </label>
+                    <span style="display: block; margin-left: 24px; color: #646970; font-size: 12px;">
+                        Prevent Kounta from updating product images
+                    </span>
+                </p>
+
+                <p>
+                    <label style="display: block; margin-bottom: 8px;">
+                        <input type="checkbox" name="_xwcpos_disable_description_sync" value="yes" <?php checked($disable_description, 'yes'); ?> />
+                        <strong>Disable Description Sync</strong>
+                    </label>
+                    <span style="display: block; margin-left: 24px; color: #646970; font-size: 12px;">
+                        Prevent Kounta from updating product description
+                    </span>
+                </p>
+
+                <p>
+                    <label style="display: block; margin-bottom: 8px;">
+                        <input type="checkbox" name="_xwcpos_disable_title_sync" value="yes" <?php checked($disable_title, 'yes'); ?> />
+                        <strong>Disable Title Sync</strong>
+                    </label>
+                    <span style="display: block; margin-left: 24px; color: #646970; font-size: 12px;">
+                        Prevent Kounta from updating product title/name
+                    </span>
+                </p>
+
+                <p>
+                    <label style="display: block; margin-bottom: 8px;">
+                        <input type="checkbox" name="_xwcpos_disable_price_sync" value="yes" <?php checked($disable_price, 'yes'); ?> />
+                        <strong>Disable Price Sync</strong>
+                    </label>
+                    <span style="display: block; margin-left: 24px; color: #646970; font-size: 12px;">
+                        Prevent Kounta from updating product price
+                    </span>
+                </p>
+
+                <p style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #dcdcde; color: #646970; font-size: 12px;">
+                    <strong>Note:</strong> Stock levels will always sync from Kounta regardless of these settings.
+                </p>
+            </div>
+            <?php
+        }
+
+        /**
+         * Save sync override meta box data
+         */
+        public function xwcpos_save_sync_override_meta($post_id) {
+            // Check nonce
+            if (!isset($_POST['xwcpos_sync_override_nonce']) ||
+                !wp_verify_nonce($_POST['xwcpos_sync_override_nonce'], 'xwcpos_sync_override_meta_box')) {
+                return;
+            }
+
+            // Check autosave
+            if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+                return;
+            }
+
+            // Check permissions
+            if (!current_user_can('edit_product', $post_id)) {
+                return;
+            }
+
+            // Save each checkbox value
+            $fields = array(
+                '_xwcpos_disable_image_sync',
+                '_xwcpos_disable_description_sync',
+                '_xwcpos_disable_title_sync',
+                '_xwcpos_disable_price_sync',
+            );
+
+            foreach ($fields as $field) {
+                if (isset($_POST[$field]) && $_POST[$field] === 'yes') {
+                    update_post_meta($post_id, $field, 'yes');
+                } else {
+                    delete_post_meta($post_id, $field);
+                }
+            }
         }
 
     }

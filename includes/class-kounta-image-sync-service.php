@@ -201,10 +201,16 @@ class Kounta_Image_Sync_Service {
      * @param string $message Message to log
      */
     private function log($message) {
-        if (class_exists('BrewHQ_Kounta_POS_Int')) {
-            $plugin = new BrewHQ_Kounta_POS_Int();
-            $plugin->plugin_log('[Image Sync] ' . $message);
-        }
+        // Use WordPress uploads directory for logging
+        // Avoid creating new plugin instances which can cause duplicate behavior
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/brewhq-kounta.log';
+
+        // Format: timestamp::[Image Sync] message
+        $log_entry = current_time('mysql') . '::[Image Sync] ' . $message . "\n";
+
+        // Append to log file
+        error_log($log_entry, 3, $log_file);
 
         // Also log to PHP error log if WP_DEBUG is enabled
         if (defined('WP_DEBUG') && WP_DEBUG) {

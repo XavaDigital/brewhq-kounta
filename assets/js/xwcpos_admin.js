@@ -179,8 +179,23 @@ function xwcpos_syncAllProductsOptimized() {
   jQuery(".success_message").hide();
   jQuery(".errosmessage").hide();
 
+  // Show progress indicator
+  jQuery("#xwcpos-sync-progress").show();
+  jQuery("#xwcpos-progress-title").text("Starting sync...");
+  jQuery("#xwcpos-progress-bar").css("width", "0%");
+  jQuery("#xwcpos-progress-percent").text("0%");
+  jQuery("#xwcpos-progress-stats").text("");
+  jQuery("#xwcpos-progress-phase").text("");
+  jQuery("#xwcpos-progress-current").text("");
+
   var ajaxurl = xwcpos_php_vars.admin_url;
   var startTime = Date.now();
+  var progressInterval = null;
+
+  // Start polling for progress
+  progressInterval = setInterval(function () {
+    xwcpos_updateSyncProgress();
+  }, 1000); // Poll every second
 
   jQuery.ajax({
     type: "POST",
@@ -188,18 +203,28 @@ function xwcpos_syncAllProductsOptimized() {
     data: { action: "xwcposSyncAllProdsOptimized" },
     timeout: 300000, // 5 minutes timeout
     success: function (response) {
+      // Stop polling
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+
       var obj = {};
       try {
         obj = JSON.parse(response);
       } catch (err) {
         console.log("Not JSON", response);
         jQuery(".spinner").hide();
+        jQuery("#xwcpos-sync-progress").hide();
         jQuery(".errosmessage").show();
         jQuery(".errosmessage").html("<p>Error parsing response</p>");
         return;
       }
 
       jQuery(".spinner").hide();
+
+      // Update progress bar to 100% on completion
+      jQuery("#xwcpos-progress-bar").css("width", "100%");
+      jQuery("#xwcpos-progress-percent").text("100%");
 
       if (obj.success) {
         jQuery(".success_message").show();
@@ -227,23 +252,98 @@ function xwcpos_syncAllProductsOptimized() {
         message += "<p>Duration: " + duration + " seconds</p>";
 
         jQuery(".success_message").html(message);
+
+        // Hide progress bar after 2 seconds
+        setTimeout(function () {
+          jQuery("#xwcpos-sync-progress").fadeOut(300);
+        }, 2000);
       } else {
         jQuery(".success_message").hide();
         jQuery(".errosmessage").show();
+        jQuery("#xwcpos-sync-progress").hide();
         var errorMsg = "<p>Error: " + (obj.error || "Unknown error") + "</p>";
+        if (obj.locked_by) {
+          errorMsg +=
+            "<p><small>Lock info: " +
+            JSON.stringify(obj.locked_by) +
+            "</small></p>";
+        }
         errorMsg +=
           '<p style="margin-top:10px;"><a href="javascript:void(0)" onclick="xwcpos_showDebugLog()" class="button">📋 View Debug Log</a></p>';
         jQuery(".errosmessage").html(errorMsg);
       }
     },
     error: function (xhr, status, error) {
+      // Stop polling
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+
       jQuery(".spinner").hide();
+      jQuery("#xwcpos-sync-progress").hide();
       jQuery(".success_message").hide();
       jQuery(".errosmessage").show();
       var errorMsg = "<p>AJAX Error: " + error + "</p>";
       errorMsg +=
         '<p style="margin-top:10px;"><a href="javascript:void(0)" onclick="xwcpos_showDebugLog()" class="button">📋 View Debug Log</a></p>';
       jQuery(".errosmessage").html(errorMsg);
+    },
+  });
+}
+
+/**
+ * Update sync progress by polling the server
+ */
+function xwcpos_updateSyncProgress() {
+  "use strict";
+
+  var ajaxurl = xwcpos_php_vars.admin_url;
+
+  jQuery.ajax({
+    type: "POST",
+    url: ajaxurl,
+    data: { action: "xwcposGetSyncProgress" },
+    timeout: 5000,
+    success: function (response) {
+      try {
+        var progress = JSON.parse(response);
+
+        if (progress && progress.active) {
+          // Update progress bar
+          var percent = progress.percent || 0;
+          jQuery("#xwcpos-progress-bar").css("width", percent + "%");
+          jQuery("#xwcpos-progress-percent").text(percent + "%");
+
+          // Update title
+          if (progress.phase) {
+            jQuery("#xwcpos-progress-title").text(progress.phase);
+          }
+
+          // Update stats
+          if (progress.current && progress.total) {
+            jQuery("#xwcpos-progress-stats").text(
+              progress.current + " / " + progress.total
+            );
+          }
+
+          // Update details
+          if (progress.current_item) {
+            jQuery("#xwcpos-progress-current").text(
+              "Processing: " + progress.current_item
+            );
+          }
+
+          if (progress.batch_info) {
+            jQuery("#xwcpos-progress-phase").text(progress.batch_info);
+          }
+        }
+      } catch (err) {
+        // Silently fail - progress polling is non-critical
+        console.log("Progress update error:", err);
+      }
+    },
+    error: function () {
+      // Silently fail - progress polling is non-critical
     },
   });
 }

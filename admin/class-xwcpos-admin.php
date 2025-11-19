@@ -700,29 +700,29 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             function xwcpos_order_item_id_orderby( $orderby_statement, $wp_query ) {
                 if( ! is_admin() )
                     return $orderby_statement;
-                    
+
                 global $pagenow;
-                if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "shop_order" && str_contains($_GET['orderby'], 'kounta_id')) {
-                    if( str_contains($_GET['order'], 'asc'))return "(m1.meta_value) ASC";
-                    if( str_contains($_GET['order'], 'desc'))return "(m1.meta_value) DESC";
+                if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "shop_order" && isset($_GET['orderby']) && str_contains($_GET['orderby'], 'kounta_id')) {
+                    if( isset($_GET['order']) && str_contains($_GET['order'], 'asc'))return "(m1.meta_value) ASC";
+                    if( isset($_GET['order']) && str_contains($_GET['order'], 'desc'))return "(m1.meta_value) DESC";
                     //return $orderby_statement;
                 } else {
-                    # Use provided statement instead 
+                    # Use provided statement instead
                     return $orderby_statement;
                 }
             }
-    
+
             function xwcpos_order_item_id_join_paged($join_paged_statement, $wp_query){
                 if( ! is_admin() )
                     return $join_paged_statement;
-    
+
                     global $pagenow;
-    
-                    if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "shop_order" && str_contains($_GET['orderby'], 'kounta_id')) {
+
+                    if ($pagenow == 'edit.php' && $wp_query->get("post_type") === "shop_order" && isset($_GET['orderby']) && str_contains($_GET['orderby'], 'kounta_id')) {
                         return "LEFT JOIN wp_postmeta m1 ON wp_posts.ID = m1.post_id AND m1.meta_key='_kounta_id'";
                         //return $join_paged_statement;
                     } else {
-                        # Use provided statement instead 
+                        # Use provided statement instead
                         return $join_paged_statement;
                     }
             }
