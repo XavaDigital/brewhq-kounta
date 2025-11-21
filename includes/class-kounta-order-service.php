@@ -516,7 +516,7 @@ class Kounta_Order_Service {
         $unit_price = $total / $quantity;
 
         return array(
-            'product_id' => $kounta_product_id,
+            'product_id' => intval($kounta_product_id),
             'quantity' => $quantity,
             'unit_price' => $unit_price,
         );
