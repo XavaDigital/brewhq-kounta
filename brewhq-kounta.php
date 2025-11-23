@@ -737,8 +737,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     return;
                 }
 
-                // Then sync products
-                $product_result = $sync_service->sync_products_optimized(0); // 0 = all products
+                // Then sync products - limit to 200 products per CRON run to avoid timeout
+                // This ensures CRON completes within 5 minutes
+                // Products are synced oldest-first, so all products will eventually be synced
+                $product_result = $sync_service->sync_products_optimized(200);
 
                 $this->plugin_log(sprintf(
                     'CRON: Optimized sync completed - %d products updated in %.2f seconds',
