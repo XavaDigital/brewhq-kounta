@@ -55,7 +55,7 @@ class Kounta_Order_Service {
      */
     public function create_order_with_retry($order_id) {
         $order = wc_get_order($order_id);
-        
+
         if (!$order) {
             return array(
                 'success' => false,
@@ -63,7 +63,20 @@ class Kounta_Order_Service {
                 'error_description' => 'Order not found',
             );
         }
-        
+
+        // Check if order is already being uploaded (prevent race condition)
+        $upload_lock = get_transient('xwcpos_uploading_order_' . $order_id);
+        if ($upload_lock) {
+            Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_attempt', array(
+                'message' => 'Order is already being uploaded, skipping duplicate attempt',
+            ));
+            return array(
+                'success' => false,
+                'error' => 'duplicate_upload_attempt',
+                'error_description' => 'Order is already being uploaded',
+            );
+        }
+
         // Check if order already has Kounta ID
         $kounta_id = $order->get_meta('_kounta_id');
         if ($kounta_id) {
@@ -74,7 +87,10 @@ class Kounta_Order_Service {
                 'error_description' => 'Order already has Kounta ID: ' . $kounta_id,
             );
         }
-        
+
+        // Set upload lock (30 second timeout)
+        set_transient('xwcpos_uploading_order_' . $order_id, true, 30);
+
         $order->add_order_note('Starting optimized order upload with retry logic');
 
         // Log sync start
@@ -87,6 +103,8 @@ class Kounta_Order_Service {
 
         if (isset($order_data['error'])) {
             Kounta_Order_Logger::log_order_failure($order_id, $order_data, array(), 0);
+            // Clear upload lock on preparation failure
+            delete_transient('xwcpos_uploading_order_' . $order_id);
             return $order_data;
         }
 
@@ -133,13 +151,16 @@ class Kounta_Order_Service {
                 // Add to failed queue for later retry
                 $this->add_to_failed_queue($order_id, $result);
 
+                // Clear upload lock on failure
+                delete_transient('xwcpos_uploading_order_' . $order_id);
+
                 return array(
                     'success' => false,
                     'error' => $result['error'],
                     'error_description' => $result['error_description'] ?? 'Unknown error',
                 );
             }
-            
+
             // Success - save Kounta ID
             if ($result) {
                 update_post_meta($order_id, '_kounta_id', $result);
@@ -153,18 +174,24 @@ class Kounta_Order_Service {
                     'message' => 'Order uploaded successfully',
                 ));
 
+                // Clear upload lock on success
+                delete_transient('xwcpos_uploading_order_' . $order_id);
+
                 return array(
                     'success' => true,
                     'order_id' => $result,
                 );
             }
-            
+
+            // Clear upload lock on unknown error
+            delete_transient('xwcpos_uploading_order_' . $order_id);
+
             return array(
                 'success' => false,
                 'error' => 'unknown_error',
                 'error_description' => 'Upload returned no result',
             );
-            
+
         } catch (Exception $e) {
             $order->add_order_note('Order upload exception: ' . $e->getMessage());
 
@@ -178,6 +205,9 @@ class Kounta_Order_Service {
             Kounta_Order_Logger::log_order_failure($order_id, $error_data, $order_data ?? array(), $attempt ?? 0);
 
             $this->add_to_failed_queue($order_id, $error_data);
+
+            // Clear upload lock on exception
+            delete_transient('xwcpos_uploading_order_' . $order_id);
 
             return array(
                 'success' => false,
