@@ -10,7 +10,8 @@ This index helps you find the right documentation for your needs.
 
 ### Get Started
 
-- **[README.md](./README.md)** - Start here! Overview, features, installation, quick start
+- **[README.md](../README.md)** - Start here! Overview, features, installation, quick start
+- **[USER-GUIDE.md](./USER-GUIDE.md)** - Complete end-user guide from setup to daily use
 
 ### Set Up Development Environment
 
@@ -66,7 +67,8 @@ This index helps you find the right documentation for your needs.
 
 | Document                                   | Purpose                       | Audience            |
 | ------------------------------------------ | ----------------------------- | ------------------- |
-| [README.md](./README.md)                   | Main overview and quick start | All users           |
+| [README.md](../README.md)                  | Main overview and quick start | All users           |
+| [USER-GUIDE.md](./USER-GUIDE.md)           | Complete end-user guide       | All users           |
 | [ADMIN-UI-GUIDE.md](./ADMIN-UI-GUIDE.md)   | Admin interface usage         | Site administrators |
 | [DEBUGGING-GUIDE.md](./DEBUGGING-GUIDE.md) | Troubleshooting guide         | Site administrators |
 
@@ -141,9 +143,10 @@ This index helps you find the right documentation for your needs.
 
 ### New User Path
 
-1. Start with [README.md](./README.md)
-2. Follow [ADMIN-UI-GUIDE.md](./ADMIN-UI-GUIDE.md) to learn the interface
-3. Keep [DEBUGGING-GUIDE.md](./DEBUGGING-GUIDE.md) handy for troubleshooting
+1. Start with [README.md](../README.md) for overview
+2. Follow [USER-GUIDE.md](./USER-GUIDE.md) for complete setup and usage
+3. Use [ADMIN-UI-GUIDE.md](./ADMIN-UI-GUIDE.md) to learn the interface details
+4. Keep [DEBUGGING-GUIDE.md](./DEBUGGING-GUIDE.md) handy for troubleshooting
 
 ### Developer Path
 
@@ -166,6 +169,7 @@ This index helps you find the right documentation for your needs.
 | Document                       | Status     | Last Updated |
 | ------------------------------ | ---------- | ------------ |
 | README.md                      | ✅ Current | 2024-01-15   |
+| USER-GUIDE.md                  | ✅ Current | 2025-12-07   |
 | ERROR-HANDLING-README.md       | ✅ Current | 2024-01-15   |
 | DEBUGGING-GUIDE.md             | ✅ Current | 2024-01-15   |
 | ROADMAP.md                     | ✅ Current | 2024-01-15   |
@@ -188,4 +192,4 @@ This index helps you find the right documentation for your needs.
 
 **Need help finding something?** Check the table of contents in each document or search for keywords across all files.
 
-**Last Updated:** 2024-01-15
+**Last Updated:** 2025-12-07
