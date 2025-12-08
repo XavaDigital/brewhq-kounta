@@ -1259,8 +1259,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             if($item->sku != null){
               $product->set_sku($item->sku);
             }
-            // Use long description instead of short description (standardized)
-            $product->set_description(isset($item->product_description) ? $item->product_description : '');
+            // Use short description instead of long description (standardized)
+            $product->set_short_description(isset($item->product_description) ? $item->product_description : '');
             $product->set_price($item->amount);
             $product->set_status('draft');
             $product->save();
@@ -1381,8 +1381,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $matrix_product_data = array(
                 'post_author' => get_current_user_id(),
                 'post_title' => isset($item->product_name) ? $item->product_name : '',
-                'post_content' => $description, // Use standardized description for long description
-                'post_excerpt' => '', // Don't populate short description
+                'post_content' => '', // Don't populate long description
+                'post_excerpt' => $description, // Use standardized description for short description
                 'post_status' => 'publish',
                 'post_type' => 'product',
             );
@@ -2748,12 +2748,12 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 ),
             );
 
-            if (isset($_POST['bulk-delete']) && is_array($_POST['bulk-delete'])) {
+            if (isset($_REQUEST['bulk-delete']) && is_array($_REQUEST['bulk-delete'])) {
 
-                //$count = count($_POST['bulk-delete']);
+                //$count = count($_REQUEST['bulk-delete']);
                 $count = 0;
 
-                foreach ($_POST['bulk-delete'] as $key => $product_id) {
+                foreach ($_REQUEST['bulk-delete'] as $key => $product_id) {
 
                     $result = $this->xwcpos_process_single_import($product_id, 'bulk', $sync);
                   if($result){
@@ -2801,11 +2801,11 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 ),
             );
 
-            if (isset($_POST['bulk-delete']) && is_array($_POST['bulk-delete'])) {
+            if (isset($_REQUEST['bulk-delete']) && is_array($_REQUEST['bulk-delete'])) {
 
-                $count = count($_POST['bulk-delete']);
+                $count = count($_REQUEST['bulk-delete']);
 
-                foreach ($_POST['bulk-delete'] as $key => $product_id) {
+                foreach ($_REQUEST['bulk-delete'] as $key => $product_id) {
 
                     $result = $this->xwcpos_process_single_sync($product_id, $sync, 'bulk');
 
@@ -2856,14 +2856,14 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 ),
             );
 
-            if (isset($_POST['bulk-delete']) && is_array($_POST['bulk-delete'])) {
+            if (isset($_REQUEST['bulk-delete']) && is_array($_REQUEST['bulk-delete'])) {
 
               $main_class_obj = new BrewHQ_Kounta_POS_Int();
               $main_class_obj->sync_inventory();
 
-                $count = count($_POST['bulk-delete']);
+                $count = count($_REQUEST['bulk-delete']);
 
-                foreach ($_POST['bulk-delete'] as $key => $product_id) {
+                foreach ($_REQUEST['bulk-delete'] as $key => $product_id) {
                   $result = $this->xwcpos_process_single_update($product_id, 'bulk');
                   $this->plugin_log('Product updated. ID:'.$product_id);
                   usleep(250000);
@@ -2911,11 +2911,11 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 ),
             );
 
-            if (isset($_POST['bulk-delete']) && is_array($_POST['bulk-delete'])) {
+            if (isset($_REQUEST['bulk-delete']) && is_array($_REQUEST['bulk-delete'])) {
 
-                $count = count($_POST['bulk-delete']);
+                $count = count($_REQUEST['bulk-delete']);
 
-                foreach ($_POST['bulk-delete'] as $key => $product_id) {
+                foreach ($_REQUEST['bulk-delete'] as $key => $product_id) {
 
                     $result = $this->xwcpos_process_single_delete($product_id, 'bulk');
 

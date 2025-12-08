@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 class Kounta_Description_Sync_Service {
 
     /**
-     * Sync product description from Kounta to WooCommerce long description field
+     * Sync product description from Kounta to WooCommerce short description field
      *
      * @param int $product_id WooCommerce product ID
      * @param object $kounta_product Kounta product data
@@ -43,28 +43,28 @@ class Kounta_Description_Sync_Service {
             );
         }
 
-        // Update long description (post_content) only
+        // Update short description (post_excerpt) only
         if (!empty($description)) {
-            $current_description = $product->get_description();
+            $current_description = $product->get_short_description();
             $sanitized_description = $this->sanitize_description($description);
 
             if ($overwrite || empty($current_description)) {
                 // Check if description actually changed before updating
                 if ($current_description !== $sanitized_description) {
-                    $this->log("Updating long description for product {$product_id} (overwrite: " . ($overwrite ? 'yes' : 'no') . ", current empty: " . (empty($current_description) ? 'yes' : 'no') . ")");
+                    $this->log("Updating short description for product {$product_id} (overwrite: " . ($overwrite ? 'yes' : 'no') . ", current empty: " . (empty($current_description) ? 'yes' : 'no') . ")");
 
                     wp_update_post(array(
                         'ID' => $product_id,
-                        'post_content' => $sanitized_description,
+                        'post_excerpt' => $sanitized_description,
                     ));
 
                     $updated = true;
-                    $this->log("Long description updated for product {$product_id}");
+                    $this->log("Short description updated for product {$product_id}");
                 } else {
-                    $this->log("Skipping long description for product {$product_id} (description unchanged)");
+                    $this->log("Skipping short description for product {$product_id} (description unchanged)");
                 }
             } else {
-                $this->log("Skipping long description for product {$product_id} (overwrite disabled and description exists)");
+                $this->log("Skipping short description for product {$product_id} (overwrite disabled and description exists)");
             }
         } else {
             $this->log("No description available from Kounta for product {$product_id}");
@@ -87,7 +87,7 @@ class Kounta_Description_Sync_Service {
     }
     
     /**
-     * Get description from Kounta product for long description field
+     * Get description from Kounta product for short description field
      * Standardized logic: Use online_description if available, otherwise description
      * This matches the database storage logic in brewhq-kounta.php line 1103
      *
