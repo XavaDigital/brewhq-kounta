@@ -142,11 +142,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
              *
              */
 
-            // Upload orders to Kounta when status changes to on-hold or processing
-            // Note: Only using status change hooks to prevent duplicate uploads
-            add_action('woocommerce_order_status_on-hold', array($this, 'xwcpos_add_order_to_kounta'), 9999);
-            add_action('woocommerce_order_status_processing', array($this, 'xwcpos_add_order_to_kounta'), 9999);
-            //add_action('woocommerce_order_status_completed', array($this, 'xwcpos_add_order_to_kounta'), 9999);
+            // Upload orders to Kounta when status changes
+            // Using woocommerce_order_status_changed to prevent duplicate uploads
+            // This hook fires once per status change and provides from/to status info
+            add_action('woocommerce_order_status_changed', array($this, 'xwcpos_order_status_changed'), 10, 4);
 
             add_action( 'init', array($this, 'script_enqueuer') );
 
@@ -1896,6 +1895,66 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     'error_description' => $e->getMessage(),
                 );
             }
+        }
+
+        /**
+         * Handle order status changes and upload to Kounta when appropriate
+         *
+         * @param int $order_id Order ID
+         * @param string $from_status Old status (without 'wc-' prefix)
+         * @param string $to_status New status (without 'wc-' prefix)
+         * @param WC_Order $order Order object
+         */
+        public function xwcpos_order_status_changed($order_id, $from_status, $to_status, $order) {
+            // Load logger for detailed tracking
+            require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-order-logger.php';
+
+            // Log every status change for debugging
+            Kounta_Order_Logger::log_order_sync($order_id, 'status_change', array(
+                'from_status' => $from_status,
+                'to_status' => $to_status,
+                'hook' => 'woocommerce_order_status_changed',
+                'message' => "Order status changed from '{$from_status}' to '{$to_status}'",
+            ));
+
+            // Only upload when transitioning TO on-hold or processing
+            // AND only if we haven't uploaded before (no Kounta ID exists)
+            $valid_to_statuses = array('on-hold', 'processing');
+
+            if (!in_array($to_status, $valid_to_statuses)) {
+                Kounta_Order_Logger::log_order_sync($order_id, 'status_ignored', array(
+                    'to_status' => $to_status,
+                    'message' => "Status '{$to_status}' is not a trigger status (on-hold or processing), skipping upload",
+                ));
+                return; // Not a status we care about
+            }
+
+            // Check if already uploaded
+            $kounta_id = $order->get_meta('_kounta_id');
+            if ($kounta_id) {
+                Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
+                    'from_status' => $from_status,
+                    'to_status' => $to_status,
+                    'kounta_id' => $kounta_id,
+                    'message' => "Order already has Kounta ID {$kounta_id}, preventing duplicate upload",
+                    'prevention_method' => 'kounta_id_check',
+                ));
+                $this->plugin_log("✅ DUPLICATE PREVENTED: Order {$order_id} status changed from '{$from_status}' to '{$to_status}', but already has Kounta ID {$kounta_id}");
+                return; // Already uploaded
+            }
+
+            // Log the upload trigger
+            Kounta_Order_Logger::log_order_sync($order_id, 'upload_triggered', array(
+                'from_status' => $from_status,
+                'to_status' => $to_status,
+                'trigger_hook' => 'woocommerce_order_status_changed',
+                'message' => "Status change from '{$from_status}' to '{$to_status}' triggered upload",
+            ));
+
+            $this->plugin_log("🚀 UPLOAD TRIGGERED: Order {$order_id} status changed from '{$from_status}' to '{$to_status}', initiating upload to Kounta");
+
+            // Upload the order
+            $this->xwcpos_add_order_to_kounta($order_id);
         }
 
         public function xwcpos_add_order_to_kounta($order_id){

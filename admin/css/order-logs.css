@@ -175,47 +175,181 @@
   background: #a7aaad;
 }
 
+.log-entries-container {
+  padding: 4px;
+}
+
 .log-entry {
-  background: #f9f9f9;
-  border: 1px solid #dcdcde;
-  border-left: 3px solid #2271b1;
-  border-radius: 4px;
-  margin-bottom: 12px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-left: 5px solid #2271b1;
+  border-radius: 8px;
+  margin-bottom: 20px;
   overflow: hidden;
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .log-entry:hover {
-  border-left-color: #135e96;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
+}
+
+/* Stage-specific colors */
+.log-entry.log-stage-success {
+  border-left-color: #00a32a;
+}
+
+.log-entry.log-stage-success:hover {
+  box-shadow: 0 2px 8px rgba(0, 163, 42, 0.15);
+}
+
+.log-entry.log-stage-prevented {
+  border-left-color: #007cba;
+}
+
+.log-entry.log-stage-prevented:hover {
+  box-shadow: 0 2px 8px rgba(0, 124, 186, 0.15);
+}
+
+.log-entry.log-stage-warning {
+  border-left-color: #dba617;
+}
+
+.log-entry.log-stage-warning:hover {
+  box-shadow: 0 2px 8px rgba(219, 166, 23, 0.15);
+}
+
+.log-entry.log-stage-error {
+  border-left-color: #d63638;
+}
+
+.log-entry.log-stage-error:hover {
+  box-shadow: 0 2px 8px rgba(214, 54, 56, 0.15);
+}
+
+.log-entry.log-stage-info {
+  border-left-color: #2271b1;
+}
+
+.log-entry.log-stage-info:hover {
+  box-shadow: 0 2px 8px rgba(34, 113, 177, 0.15);
+}
+
+.log-entry.log-stage-neutral {
+  border-left-color: #8c8f94;
+}
+
+.log-entry.log-stage-neutral:hover {
+  box-shadow: 0 2px 8px rgba(140, 143, 148, 0.15);
 }
 
 .log-entry-header {
-  background: #fff;
-  padding: 8px 15px;
-  border-bottom: 1px solid #dcdcde;
-  font-size: 11px;
-  font-weight: 600;
-  color: #646970;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  background: #f9fafb;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .log-entry-number {
-  color: #2271b1;
+  color: #646970;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  opacity: 0.7;
 }
 
-.log-entry pre {
+.log-entry-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: #f0f0f1;
+  padding: 6px 14px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1d2327;
+  letter-spacing: 0.3px;
+}
+
+.log-entry.log-stage-success .log-entry-stage {
+  background: #d5f2e0;
+  color: #00712a;
+}
+
+.log-entry.log-stage-prevented .log-entry-stage {
+  background: #cce7f5;
+  color: #005a87;
+}
+
+.log-entry.log-stage-warning .log-entry-stage {
+  background: #fef5d4;
+  color: #7a5600;
+}
+
+.log-entry.log-stage-error .log-entry-stage {
+  background: #fdd9da;
+  color: #a01a1c;
+}
+
+.log-entry.log-stage-info .log-entry-stage {
+  background: #d6e9f5;
+  color: #135e96;
+}
+
+.log-entry.log-stage-neutral .log-entry-stage {
+  background: #e8e9eb;
+  color: #50575e;
+}
+
+.stage-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.stage-text {
+  line-height: 1;
+}
+
+.log-entry-order-id {
+  font-size: 13px;
+  font-weight: 700;
+  color: #135e96;
+  background: #e8f4f8;
+  padding: 6px 14px;
+  border-radius: 16px;
+  border: 1px solid #b8dce8;
+}
+
+.log-entry-timestamp {
+  font-size: 11px;
+  color: #646970;
+  margin-left: auto;
+  font-weight: 500;
+  font-family: "Consolas", "Monaco", monospace;
+}
+
+.log-entry-content {
+  padding: 18px;
+}
+
+.log-entry-full-text {
   margin: 0;
-  padding: 15px;
+  padding: 16px;
   white-space: pre-wrap;
   word-wrap: break-word;
   font-family: "Consolas", "Monaco", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.7;
-  background: #f9f9f9;
+  font-size: 11px;
+  line-height: 1.8;
+  background: #f9fafb;
   color: #1d2327;
   overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
 }
 
 /* Modal Styles */

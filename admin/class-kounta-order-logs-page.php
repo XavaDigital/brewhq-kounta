@@ -43,13 +43,18 @@ class Kounta_Order_Logs_Page {
      * Enqueue scripts and styles
      */
     public function enqueue_scripts($hook) {
-        if ($hook !== 'woocommerce_page_kounta-order-logs') {
+        // Check if we're on the Order Sync Logs page
+        // The hook format for submenu pages is: {parent-slug}_page_{menu-slug}
+        if ($hook !== 'kounta-pos-integration_page_kounta-order-logs') {
             return;
         }
-        
-        wp_enqueue_style('kounta-order-logs', plugins_url('css/order-logs.css', __FILE__), array(), '1.0.0');
-        wp_enqueue_script('kounta-order-logs', plugins_url('js/order-logs.js', __FILE__), array('jquery'), '1.0.0', true);
-        
+
+        // Use timestamp for aggressive cache busting during development
+        $version = '2.1.0.' . filemtime(plugin_dir_path(__FILE__) . 'css/order-logs.css');
+
+        wp_enqueue_style('kounta-order-logs', plugins_url('css/order-logs.css', __FILE__), array(), $version);
+        wp_enqueue_script('kounta-order-logs', plugins_url('js/order-logs.js', __FILE__), array('jquery'), $version, true);
+
         wp_localize_script('kounta-order-logs', 'kountaOrderLogs', array(
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('kounta_order_logs'),
@@ -204,11 +209,35 @@ class Kounta_Order_Logs_Page {
                 <?php else: ?>
                     <div class="log-entries-container">
                         <?php foreach ($logs as $index => $log): ?>
-                            <div class="log-entry">
+                            <?php
+                            // Parse log entry to extract key information
+                            $parsed = $this->parse_log_entry($log);
+                            $stage_class = $this->get_stage_class($parsed['stage']);
+                            $stage_icon = $this->get_stage_icon($parsed['stage']);
+                            ?>
+                            <div class="log-entry <?php echo esc_attr($stage_class); ?>">
                                 <div class="log-entry-header">
                                     <span class="log-entry-number">Entry #<?php echo count($logs) - $index; ?></span>
+                                    <?php if ($parsed['stage']): ?>
+                                        <span class="log-entry-stage">
+                                            <span class="stage-icon"><?php echo $stage_icon; ?></span>
+                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($parsed['order_id']): ?>
+                                        <span class="log-entry-order-id">
+                                            Order #<?php echo esc_html($parsed['order_id']); ?>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($parsed['timestamp']): ?>
+                                        <span class="log-entry-timestamp">
+                                            <?php echo esc_html($parsed['timestamp']); ?>
+                                        </span>
+                                    <?php endif; ?>
                                 </div>
-                                <pre><?php echo esc_html($log); ?></pre>
+                                <div class="log-entry-content">
+                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                </div>
                             </div>
                         <?php endforeach; ?>
                     </div>
@@ -303,6 +332,93 @@ class Kounta_Order_Logs_Page {
             'report' => $report,
             'order_id' => $order_id,
         ));
+    }
+
+    /**
+     * Parse log entry to extract key information
+     *
+     * @param string $log Raw log entry
+     * @return array Parsed data
+     */
+    private function parse_log_entry($log) {
+        $parsed = array(
+            'timestamp' => '',
+            'stage' => '',
+            'order_id' => '',
+            'message' => '',
+        );
+
+        // Extract timestamp
+        if (preg_match('/\[([^\]]+)\]/', $log, $matches)) {
+            $parsed['timestamp'] = $matches[1];
+        }
+
+        // Extract stage
+        if (preg_match('/STAGE:\s*\n([^\n]+)/', $log, $matches)) {
+            $parsed['stage'] = trim($matches[1]);
+        }
+
+        // Extract order ID
+        if (preg_match('/ORDER[_ ]ID:\s*\n(\d+)/', $log, $matches)) {
+            $parsed['order_id'] = trim($matches[1]);
+        }
+
+        // Extract message from DATA section
+        if (preg_match('/"message":\s*"([^"]+)"/', $log, $matches)) {
+            $parsed['message'] = trim($matches[1]);
+        }
+
+        return $parsed;
+    }
+
+    /**
+     * Get CSS class for stage
+     *
+     * @param string $stage Stage name
+     * @return string CSS class
+     */
+    private function get_stage_class($stage) {
+        $classes = array(
+            'success' => 'log-stage-success',
+            'duplicate_prevented' => 'log-stage-prevented',
+            'duplicate_found' => 'log-stage-prevented',
+            'duplicate_attempt' => 'log-stage-warning',
+            'upload_triggered' => 'log-stage-info',
+            'status_change' => 'log-stage-neutral',
+            'status_ignored' => 'log-stage-neutral',
+            'prepare' => 'log-stage-info',
+            'prepared' => 'log-stage-info',
+            'upload_attempt' => 'log-stage-info',
+            'failure' => 'log-stage-error',
+            'ORDER_FAILURE' => 'log-stage-error',
+        );
+
+        return isset($classes[$stage]) ? $classes[$stage] : 'log-stage-default';
+    }
+
+    /**
+     * Get icon for stage
+     *
+     * @param string $stage Stage name
+     * @return string Icon HTML
+     */
+    private function get_stage_icon($stage) {
+        $icons = array(
+            'success' => '✅',
+            'duplicate_prevented' => '🛡️',
+            'duplicate_found' => '🛡️',
+            'duplicate_attempt' => '⚠️',
+            'upload_triggered' => '🚀',
+            'status_change' => '🔄',
+            'status_ignored' => '⏭️',
+            'prepare' => '📋',
+            'prepared' => '📋',
+            'upload_attempt' => '📤',
+            'failure' => '❌',
+            'ORDER_FAILURE' => '❌',
+        );
+
+        return isset($icons[$stage]) ? $icons[$stage] : '📝';
     }
 }
 
