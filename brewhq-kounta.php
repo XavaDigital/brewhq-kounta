@@ -142,10 +142,11 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
              *
              */
 
-            // Upload orders to Kounta when status changes
-            // Using woocommerce_order_status_changed to prevent duplicate uploads
-            // This hook fires once per status change and provides from/to status info
-            add_action('woocommerce_order_status_changed', array($this, 'xwcpos_order_status_changed'), 10, 4);
+            // Upload orders to Kounta when they reach specific statuses
+            // Using ONLY direct status hooks to avoid race conditions
+            // Priority 20 ensures this runs AFTER payment processing is complete
+            add_action('woocommerce_order_status_processing', array($this, 'xwcpos_order_status_processing_direct'), 20, 2);
+            add_action('woocommerce_order_status_on-hold', array($this, 'xwcpos_order_status_onhold_direct'), 20, 2);
 
             add_action( 'init', array($this, 'script_enqueuer') );
 
@@ -1898,64 +1899,113 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         /**
-         * Handle order status changes and upload to Kounta when appropriate
+         * Handle direct status change to processing
+         * This fires when order is created directly as 'processing' or changed to 'processing'
          *
          * @param int $order_id Order ID
-         * @param string $from_status Old status (without 'wc-' prefix)
-         * @param string $to_status New status (without 'wc-' prefix)
          * @param WC_Order $order Order object
          */
-        public function xwcpos_order_status_changed($order_id, $from_status, $to_status, $order) {
-            // Load logger for detailed tracking
+        public function xwcpos_order_status_processing_direct($order_id, $order) {
             require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-order-logger.php';
 
-            // Log every status change for debugging
-            Kounta_Order_Logger::log_order_sync($order_id, 'status_change', array(
-                'from_status' => $from_status,
-                'to_status' => $to_status,
-                'hook' => 'woocommerce_order_status_changed',
-                'message' => "Order status changed from '{$from_status}' to '{$to_status}'",
-            ));
-
-            // Only upload when transitioning TO on-hold or processing
-            // AND only if we haven't uploaded before (no Kounta ID exists)
-            $valid_to_statuses = array('on-hold', 'processing');
-
-            if (!in_array($to_status, $valid_to_statuses)) {
-                Kounta_Order_Logger::log_order_sync($order_id, 'status_ignored', array(
-                    'to_status' => $to_status,
-                    'message' => "Status '{$to_status}' is not a trigger status (on-hold or processing), skipping upload",
+            // FIRST: Check if we're already processing this order (race condition protection)
+            $processing_lock = get_transient('xwcpos_processing_hook_' . $order_id);
+            if ($processing_lock) {
+                Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
+                    'hook' => 'woocommerce_order_status_processing',
+                    'message' => 'Hook already fired for this order, preventing duplicate',
+                    'prevention_method' => 'hook_lock',
                 ));
-                return; // Not a status we care about
+                return;
             }
 
-            // Check if already uploaded
+            // Set lock immediately to prevent other hooks from running
+            set_transient('xwcpos_processing_hook_' . $order_id, time(), 60); // 60 second lock
+
+            // SECOND: Check if already uploaded
             $kounta_id = $order->get_meta('_kounta_id');
             if ($kounta_id) {
                 Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
-                    'from_status' => $from_status,
-                    'to_status' => $to_status,
                     'kounta_id' => $kounta_id,
+                    'hook' => 'woocommerce_order_status_processing',
                     'message' => "Order already has Kounta ID {$kounta_id}, preventing duplicate upload",
-                    'prevention_method' => 'kounta_id_check',
+                    'prevention_method' => 'kounta_id_check_direct_hook',
                 ));
-                $this->plugin_log("✅ DUPLICATE PREVENTED: Order {$order_id} status changed from '{$from_status}' to '{$to_status}', but already has Kounta ID {$kounta_id}");
-                return; // Already uploaded
+                delete_transient('xwcpos_processing_hook_' . $order_id);
+                return;
             }
 
             // Log the upload trigger
             Kounta_Order_Logger::log_order_sync($order_id, 'upload_triggered', array(
-                'from_status' => $from_status,
-                'to_status' => $to_status,
-                'trigger_hook' => 'woocommerce_order_status_changed',
-                'message' => "Status change from '{$from_status}' to '{$to_status}' triggered upload",
+                'to_status' => 'processing',
+                'trigger_hook' => 'woocommerce_order_status_processing',
+                'message' => "Direct status hook 'processing' triggered upload",
             ));
 
-            $this->plugin_log("🚀 UPLOAD TRIGGERED: Order {$order_id} status changed from '{$from_status}' to '{$to_status}', initiating upload to Kounta");
+            $this->plugin_log("🚀 UPLOAD TRIGGERED: Order {$order_id} processing hook fired, initiating upload to Kounta");
 
             // Upload the order
             $this->xwcpos_add_order_to_kounta($order_id);
+
+            // Clear hook lock after upload completes
+            delete_transient('xwcpos_processing_hook_' . $order_id);
         }
+
+        /**
+         * Handle direct status change to on-hold
+         * This fires when order is created directly as 'on-hold' or changed to 'on-hold'
+         *
+         * @param int $order_id Order ID
+         * @param WC_Order $order Order object
+         */
+        public function xwcpos_order_status_onhold_direct($order_id, $order) {
+            require_once XWCPOS_PLUGIN_DIR . 'includes/class-kounta-order-logger.php';
+
+            // FIRST: Check if we're already processing this order (race condition protection)
+            $processing_lock = get_transient('xwcpos_processing_hook_' . $order_id);
+            if ($processing_lock) {
+                Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
+                    'hook' => 'woocommerce_order_status_on-hold',
+                    'message' => 'Hook already fired for this order, preventing duplicate',
+                    'prevention_method' => 'hook_lock',
+                ));
+                return;
+            }
+
+            // Set lock immediately to prevent other hooks from running
+            set_transient('xwcpos_processing_hook_' . $order_id, time(), 60); // 60 second lock
+
+            // SECOND: Check if already uploaded
+            $kounta_id = $order->get_meta('_kounta_id');
+            if ($kounta_id) {
+                Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
+                    'kounta_id' => $kounta_id,
+                    'hook' => 'woocommerce_order_status_on-hold',
+                    'message' => "Order already has Kounta ID {$kounta_id}, preventing duplicate upload",
+                    'prevention_method' => 'kounta_id_check_direct_hook',
+                ));
+                delete_transient('xwcpos_processing_hook_' . $order_id);
+                return;
+            }
+
+            // Log the upload trigger
+            Kounta_Order_Logger::log_order_sync($order_id, 'upload_triggered', array(
+                'to_status' => 'on-hold',
+                'trigger_hook' => 'woocommerce_order_status_on-hold',
+                'message' => "Direct status hook 'on-hold' triggered upload",
+            ));
+
+            $this->plugin_log("🚀 UPLOAD TRIGGERED: Order {$order_id} on-hold hook fired, initiating upload to Kounta");
+
+            // Upload the order
+            $this->xwcpos_add_order_to_kounta($order_id);
+
+            // Clear hook lock after upload completes
+            delete_transient('xwcpos_processing_hook_' . $order_id);
+        }
+
+        // REMOVED: xwcpos_order_status_changed() function
+        // We now use ONLY direct status hooks to avoid race conditions
 
         public function xwcpos_add_order_to_kounta($order_id){
             // Use optimized order service with logging if available

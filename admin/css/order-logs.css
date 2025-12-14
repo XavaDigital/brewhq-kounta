@@ -179,6 +179,70 @@
   padding: 4px;
 }
 
+/* ===========================
+   ORDER GROUP STYLING
+   =========================== */
+
+.log-order-group {
+  margin-bottom: 32px;
+  border: 2px solid #e0e0e0;
+  border-radius: 12px;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+.log-order-group-header {
+  background: linear-gradient(135deg, #2271b1 0%, #1a5a8a 100%);
+  color: #fff;
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.log-order-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  letter-spacing: 0.3px;
+}
+
+.log-order-group-title .dashicons {
+  font-size: 24px;
+  width: 24px;
+  height: 24px;
+}
+
+.log-order-group-count {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.log-order-group-entries {
+  padding: 16px;
+}
+
+.log-order-group-entries .log-entry {
+  margin-bottom: 12px;
+}
+
+.log-order-group-entries .log-entry:last-child {
+  margin-bottom: 0;
+}
+
+/* Separator entries (no order ID) */
+.log-entry-separator {
+  margin-bottom: 20px;
+  opacity: 0.7;
+}
+
 .log-entry {
   background: #fff;
   border: 1px solid #e0e0e0;

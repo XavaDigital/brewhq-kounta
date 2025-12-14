@@ -207,39 +207,128 @@ class Kounta_Order_Logs_Page {
                         <p><strong>No log entries found.</strong> <?php echo $order_id ? 'Try removing the order ID filter.' : 'Logs will appear here when orders are synced.'; ?></p>
                     </div>
                 <?php else: ?>
-                    <div class="log-entries-container">
-                        <?php foreach ($logs as $index => $log): ?>
-                            <?php
-                            // Parse log entry to extract key information
-                            $parsed = $this->parse_log_entry($log);
-                            $stage_class = $this->get_stage_class($parsed['stage']);
-                            $stage_icon = $this->get_stage_icon($parsed['stage']);
-                            ?>
-                            <div class="log-entry <?php echo esc_attr($stage_class); ?>">
-                                <div class="log-entry-header">
-                                    <span class="log-entry-number">Entry #<?php echo count($logs) - $index; ?></span>
-                                    <?php if ($parsed['stage']): ?>
-                                        <span class="log-entry-stage">
-                                            <span class="stage-icon"><?php echo $stage_icon; ?></span>
-                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php if ($parsed['order_id']): ?>
-                                        <span class="log-entry-order-id">
-                                            Order #<?php echo esc_html($parsed['order_id']); ?>
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php if ($parsed['timestamp']): ?>
-                                        <span class="log-entry-timestamp">
-                                            <?php echo esc_html($parsed['timestamp']); ?>
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="log-entry-content">
-                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
-                                </div>
+                    <?php
+                    // Group logs by order ID
+                    $grouped_logs = $this->group_logs_by_order($logs);
+                    $entry_counter = count($logs);
+                    ?>
+
+                    <!-- DEBUG PANEL - ALWAYS VISIBLE FOR NOW -->
+                    <div style="background: #fff3cd; border: 2px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 8px; font-family: monospace;">
+                        <strong style="font-size: 14px; color: #856404;">🐛 DEBUG: Log Grouping Analysis</strong><br><br>
+                        <strong>Total log entries:</strong> <?php echo count($logs); ?><br>
+                        <strong>Total groups created:</strong> <?php echo count($grouped_logs); ?><br><br>
+
+                        <?php foreach ($grouped_logs as $oid => $ologs): ?>
+                            <?php $color = ($oid === 'separator') ? '#dc3545' : '#28a745'; ?>
+                            <div style="background: rgba(0,0,0,0.05); padding: 8px; margin: 5px 0; border-left: 4px solid <?php echo $color; ?>;">
+                                <strong>Group:</strong> <?php echo esc_html($oid); ?> → <strong><?php echo count($ologs); ?></strong> <?php echo count($ologs) === 1 ? 'entry' : 'entries'; ?>
+
+                                <?php if (count($ologs) > 0): ?>
+                                    <?php $first_parsed = $this->parse_log_entry($ologs[0]); ?>
+                                    <br><small style="color: #666;">Stage: <?php echo esc_html($first_parsed['stage']); ?>, Timestamp: <?php echo esc_html($first_parsed['timestamp']); ?></small>
+                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
+                    </div>
+
+                    <div class="log-entries-container">
+                        <?php
+                        // First, show all order groups
+                        foreach ($grouped_logs as $order_id => $order_logs):
+                            $is_separator = ($order_id === 'separator');
+
+                            // Skip separator group for now
+                            if ($is_separator) {
+                                continue;
+                            }
+                        ?>
+                                <!-- Order group -->
+                                <div class="log-order-group">
+                                    <div class="log-order-group-header">
+                                        <span class="log-order-group-title">
+                                            <span class="dashicons dashicons-cart"></span>
+                                            Order #<?php echo esc_html($order_id); ?>
+                                        </span>
+                                        <span class="log-order-group-count">
+                                            <?php echo count($order_logs); ?> <?php echo count($order_logs) === 1 ? 'entry' : 'entries'; ?>
+                                        </span>
+                                    </div>
+                                    <div class="log-order-group-entries">
+                                        <?php foreach ($order_logs as $log): ?>
+                                            <?php
+                                            $parsed = $this->parse_log_entry($log);
+                                            $stage_class = $this->get_stage_class($parsed['stage']);
+                                            $stage_icon = $this->get_stage_icon($parsed['stage']);
+                                            ?>
+                                            <div class="log-entry <?php echo esc_attr($stage_class); ?>">
+                                                <div class="log-entry-header">
+                                                    <span class="log-entry-number">Entry #<?php echo $entry_counter--; ?></span>
+                                                    <?php if ($parsed['stage']): ?>
+                                                        <span class="log-entry-stage">
+                                                            <span class="stage-icon"><?php echo $stage_icon; ?></span>
+                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($parsed['timestamp']): ?>
+                                                        <span class="log-entry-timestamp">
+                                                            <?php echo esc_html($parsed['timestamp']); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <div class="log-entry-content">
+                                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                        <?php endforeach; ?>
+
+                        <?php
+                        // Now show separator group (other entries) in a collapsible section
+                        if (isset($grouped_logs['separator']) && count($grouped_logs['separator']) > 0):
+                        ?>
+                            <div class="log-other-entries" style="margin-top: 40px;">
+                                <details style="background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 8px; padding: 0; overflow: hidden;">
+                                    <summary style="padding: 16px 20px; cursor: pointer; font-weight: 600; color: #646970; user-select: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                                        <span>
+                                            <span class="dashicons dashicons-info" style="margin-right: 8px;"></span>
+                                            Other Log Entries (<?php echo count($grouped_logs['separator']); ?>)
+                                        </span>
+                                        <span style="font-size: 12px; font-weight: 400; color: #a7aaad;">Click to expand</span>
+                                    </summary>
+                                    <div style="padding: 16px; background: #fff; border-top: 1px solid #dcdcde;">
+                                        <?php foreach ($grouped_logs['separator'] as $log): ?>
+                                            <?php
+                                            $parsed = $this->parse_log_entry($log);
+                                            $stage_class = $this->get_stage_class($parsed['stage']);
+                                            $stage_icon = $this->get_stage_icon($parsed['stage']);
+                                            ?>
+                                            <div class="log-entry <?php echo esc_attr($stage_class); ?> log-entry-separator" style="margin-bottom: 12px;">
+                                                <div class="log-entry-header">
+                                                    <span class="log-entry-number">Entry #<?php echo $entry_counter--; ?></span>
+                                                    <?php if ($parsed['stage']): ?>
+                                                        <span class="log-entry-stage">
+                                                            <span class="stage-icon"><?php echo $stage_icon; ?></span>
+                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($parsed['timestamp']): ?>
+                                                        <span class="log-entry-timestamp">
+                                                            <?php echo esc_html($parsed['timestamp']); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <div class="log-entry-content">
+                                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </details>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </div>
@@ -335,6 +424,36 @@ class Kounta_Order_Logs_Page {
     }
 
     /**
+     * Group log entries by order ID
+     *
+     * @param array $logs Log entries
+     * @return array Grouped logs
+     */
+    private function group_logs_by_order($logs) {
+        $grouped = array();
+
+        foreach ($logs as $log) {
+            $parsed = $this->parse_log_entry($log);
+            $order_id = $parsed['order_id'];
+
+            if ($order_id) {
+                if (!isset($grouped[$order_id])) {
+                    $grouped[$order_id] = array();
+                }
+                $grouped[$order_id][] = $log;
+            } else {
+                // Entries without order ID go into a separator group
+                if (!isset($grouped['separator'])) {
+                    $grouped['separator'] = array();
+                }
+                $grouped['separator'][] = $log;
+            }
+        }
+
+        return $grouped;
+    }
+
+    /**
      * Parse log entry to extract key information
      *
      * @param string $log Raw log entry
@@ -353,13 +472,13 @@ class Kounta_Order_Logs_Page {
             $parsed['timestamp'] = $matches[1];
         }
 
-        // Extract stage
-        if (preg_match('/STAGE:\s*\n([^\n]+)/', $log, $matches)) {
+        // Extract stage - more flexible pattern
+        if (preg_match('/STAGE:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
             $parsed['stage'] = trim($matches[1]);
         }
 
-        // Extract order ID
-        if (preg_match('/ORDER[_ ]ID:\s*\n(\d+)/', $log, $matches)) {
+        // Extract order ID - more flexible pattern to handle different line endings
+        if (preg_match('/ORDER\s+ID:\s*[\r\n]+(\d+)/', $log, $matches)) {
             $parsed['order_id'] = trim($matches[1]);
         }
 

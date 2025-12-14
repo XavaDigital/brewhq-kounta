@@ -80,6 +80,13 @@ class Kounta_Order_Service {
         // Check if order already has Kounta ID
         $kounta_id = $order->get_meta('_kounta_id');
         if ($kounta_id) {
+            // Log duplicate prevention
+            Kounta_Order_Logger::log_order_sync($order_id, 'duplicate_prevented', array(
+                'kounta_id' => $kounta_id,
+                'message' => 'Order already has Kounta ID ' . $kounta_id . ', preventing duplicate upload',
+                'prevention_method' => 'kounta_id_check_in_service',
+            ));
+
             $order->add_order_note('Upload attempted. Order already exists. Order#: ' . $kounta_id);
             return array(
                 'success' => false,
