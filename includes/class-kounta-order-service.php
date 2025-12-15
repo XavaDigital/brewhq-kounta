@@ -121,55 +121,25 @@ class Kounta_Order_Service {
             'item_count' => count($order_data['lines']),
             'total' => $order_data['payments'][0]['amount'] ?? 0,
         ));
-        
-        // Execute with retry logic
-        try {
-            $attempt = 0;
-            $result = $this->retry_strategy->execute(
-                function() use ($order_data, $order, $order_id, &$attempt) {
-                    $attempt++;
-                    Kounta_Order_Logger::log_order_sync($order_id, 'upload_attempt', array(
-                        'attempt' => $attempt,
-                        'message' => "Upload attempt #{$attempt}",
-                    ));
-                    return $this->upload_order($order_data, $order, $order_id, $attempt);
-                },
-                function($error) {
-                    return $this->is_retryable_order_error($error);
-                }
-            );
 
-            // Handle result
-            if (is_array($result) && isset($result['error'])) {
-                $order->add_order_note(sprintf(
-                    'Order upload failed after all retries. Error: %s - %s',
-                    $result['error'],
-                    $result['error_description'] ?? 'No description'
-                ));
+        // Execute upload with custom retry logic that handles verification failures
+        $max_upload_attempts = 2;
+        $last_error = null;
 
-                // Log comprehensive failure
-                Kounta_Order_Logger::log_order_failure($order_id, $result, $order_data, $attempt);
+        for ($upload_attempt = 1; $upload_attempt <= $max_upload_attempts; $upload_attempt++) {
+            // Log upload attempt
+            Kounta_Order_Logger::log_order_sync($order_id, 'upload_attempt', array(
+                'attempt' => $upload_attempt,
+                'max_attempts' => $max_upload_attempts,
+                'message' => "Upload attempt #{$upload_attempt} of {$max_upload_attempts}",
+            ));
 
-                // Send email notification if enabled
-                if (get_option('xwcpos_send_order_error_emails', true)) {
-                    Kounta_Order_Logger::send_error_notification($order_id, $result, $order_data);
-                }
+            // Try to upload the order
+            $result = $this->upload_order($order_data, $order, $order_id, $upload_attempt);
 
-                // Add to failed queue for later retry
-                $this->add_to_failed_queue($order_id, $result);
-
-                // Clear upload lock on failure
-                delete_transient('xwcpos_uploading_order_' . $order_id);
-
-                return array(
-                    'success' => false,
-                    'error' => $result['error'],
-                    'error_description' => $result['error_description'] ?? 'Unknown error',
-                );
-            }
-
-            // Success - save Kounta ID
-            if ($result) {
+            // Check if we got a Kounta order ID (success)
+            if (is_numeric($result) || (is_string($result) && !empty($result))) {
+                // Success - save Kounta ID
                 update_post_meta($order_id, '_kounta_id', $result);
                 update_post_meta($order_id, '_kounta_upload_time', current_time('mysql'));
                 $order->add_order_note('Order uploaded to Kounta successfully. Order#: ' . $result);
@@ -177,7 +147,7 @@ class Kounta_Order_Service {
                 // Log success
                 Kounta_Order_Logger::log_order_sync($order_id, 'success', array(
                     'kounta_order_id' => $result,
-                    'attempts' => $attempt,
+                    'attempts' => $upload_attempt,
                     'message' => 'Order uploaded successfully',
                 ));
 
@@ -190,38 +160,81 @@ class Kounta_Order_Service {
                 );
             }
 
-            // Clear upload lock on unknown error
-            delete_transient('xwcpos_uploading_order_' . $order_id);
+            // Check if we got an error
+            if (is_array($result) && isset($result['error'])) {
+                $last_error = $result;
+                $error_type = $result['error'];
 
-            return array(
-                'success' => false,
-                'error' => 'unknown_error',
-                'error_description' => 'Upload returned no result',
-            );
+                // Check if this is a non-retryable error
+                if (!$this->is_retryable_order_error($result)) {
+                    Kounta_Order_Logger::log_order_sync($order_id, 'non_retryable_error', array(
+                        'error' => $error_type,
+                        'message' => "Non-retryable error encountered: {$error_type}",
+                    ));
+                    break; // Don't retry non-retryable errors
+                }
 
-        } catch (Exception $e) {
-            $order->add_order_note('Order upload exception: ' . $e->getMessage());
+                // For verification_failed, we want to retry the upload
+                if ($error_type === 'verification_failed') {
+                    if ($upload_attempt < $max_upload_attempts) {
+                        Kounta_Order_Logger::log_order_sync($order_id, 'verification_failed_retry', array(
+                            'attempt' => $upload_attempt,
+                            'remaining_attempts' => $max_upload_attempts - $upload_attempt,
+                            'message' => "Verification failed after multiple checks. Will retry upload (attempt {$upload_attempt} of {$max_upload_attempts})",
+                        ));
+                        // Wait a bit before retrying the upload
+                        sleep(2);
+                        continue; // Try uploading again
+                    }
+                }
 
-            $error_data = array(
-                'error' => 'exception',
-                'error_description' => $e->getMessage(),
-                'stack_trace' => $e->getTraceAsString(),
-            );
-
-            // Log exception with full details
-            Kounta_Order_Logger::log_order_failure($order_id, $error_data, $order_data ?? array(), $attempt ?? 0);
-
-            $this->add_to_failed_queue($order_id, $error_data);
-
-            // Clear upload lock on exception
-            delete_transient('xwcpos_uploading_order_' . $order_id);
-
-            return array(
-                'success' => false,
-                'error' => 'exception',
-                'error_description' => $e->getMessage(),
-            );
+                // For other retryable errors, wait and retry
+                if ($upload_attempt < $max_upload_attempts) {
+                    $delay = min(2 * $upload_attempt, 5); // 2s, 4s, 5s
+                    Kounta_Order_Logger::log_order_sync($order_id, 'retryable_error', array(
+                        'error' => $error_type,
+                        'attempt' => $upload_attempt,
+                        'delay' => $delay,
+                        'message' => "Retryable error: {$error_type}. Waiting {$delay}s before retry",
+                    ));
+                    sleep($delay);
+                    continue;
+                }
+            }
         }
+
+        // All attempts failed
+        $final_error = $last_error ?? array(
+            'error' => 'unknown_error',
+            'error_description' => 'Upload returned no result',
+        );
+
+        $order->add_order_note(sprintf(
+            'Order upload failed after %d attempts. Error: %s - %s',
+            $max_upload_attempts,
+            $final_error['error'],
+            $final_error['error_description'] ?? 'No description'
+        ));
+
+        // Log comprehensive failure
+        Kounta_Order_Logger::log_order_failure($order_id, $final_error, $order_data, $max_upload_attempts);
+
+        // Send email notification if enabled
+        if (get_option('xwcpos_send_order_error_emails', true)) {
+            Kounta_Order_Logger::send_error_notification($order_id, $final_error, $order_data);
+        }
+
+        // Add to failed queue for later retry
+        $this->add_to_failed_queue($order_id, $final_error);
+
+        // Clear upload lock on failure
+        delete_transient('xwcpos_uploading_order_' . $order_id);
+
+        return array(
+            'success' => false,
+            'error' => $final_error['error'],
+            'error_description' => $final_error['error_description'] ?? 'Unknown error',
+        );
     }
     
     /**
@@ -369,9 +382,9 @@ class Kounta_Order_Service {
 
         // Handle different response types
         if ($result === null || $result === '') {
-            // API returned null - verify order was created
-            sleep(1); // Brief wait for eventual consistency
-            $verify_order = $this->find_order_by_sale_number($order_data);
+            // API returned null - verify order was created with multiple attempts
+            // This handles eventual consistency issues with the Kounta API
+            $verify_order = $this->verify_order_creation_with_retries($order_data, $order_id);
 
             if ($verify_order) {
                 return $verify_order->id;
@@ -379,7 +392,7 @@ class Kounta_Order_Service {
 
             return array(
                 'error' => 'verification_failed',
-                'error_description' => 'Order upload returned null and verification failed',
+                'error_description' => 'Order upload returned null and verification failed after multiple attempts',
             );
         }
 
@@ -451,6 +464,63 @@ class Kounta_Order_Service {
                 return $order;
             }
         }
+
+        return false;
+    }
+
+    /**
+     * Verify order creation with multiple retry attempts
+     *
+     * When the Kounta API returns null, we need to verify the order was actually created.
+     * Due to eventual consistency, we retry the verification multiple times with increasing delays.
+     *
+     * @param array $order_data Order data with sale_number
+     * @param int $order_id WooCommerce order ID for logging
+     * @return object|false Order object or false
+     */
+    private function verify_order_creation_with_retries($order_data, $order_id) {
+        $max_verification_attempts = 4;
+        $delays = array(1, 2, 3, 5); // Seconds to wait before each attempt
+
+        for ($i = 0; $i < $max_verification_attempts; $i++) {
+            // Wait before checking (increasing delays for eventual consistency)
+            sleep($delays[$i]);
+
+            // Log verification attempt
+            Kounta_Order_Logger::log_order_sync($order_id, 'verification_attempt', array(
+                'attempt' => $i + 1,
+                'max_attempts' => $max_verification_attempts,
+                'delay' => $delays[$i],
+                'message' => "Verification attempt #" . ($i + 1) . " after {$delays[$i]}s delay",
+            ));
+
+            // Try to find the order
+            $verify_order = $this->find_order_by_sale_number($order_data);
+
+            if ($verify_order) {
+                // Success! Order was found
+                Kounta_Order_Logger::log_order_sync($order_id, 'verification_success', array(
+                    'attempt' => $i + 1,
+                    'kounta_order_id' => $verify_order->id,
+                    'message' => "Order verified successfully on attempt #" . ($i + 1),
+                ));
+                return $verify_order;
+            }
+
+            // Log failed attempt (but continue trying)
+            Kounta_Order_Logger::log_order_sync($order_id, 'verification_retry', array(
+                'attempt' => $i + 1,
+                'remaining_attempts' => $max_verification_attempts - ($i + 1),
+                'message' => "Verification attempt #" . ($i + 1) . " failed, will retry",
+            ));
+        }
+
+        // All verification attempts failed
+        Kounta_Order_Logger::log_order_sync($order_id, 'verification_exhausted', array(
+            'total_attempts' => $max_verification_attempts,
+            'total_wait_time' => array_sum($delays),
+            'message' => "All {$max_verification_attempts} verification attempts failed after " . array_sum($delays) . " seconds",
+        ));
 
         return false;
     }
@@ -623,7 +693,7 @@ class Kounta_Order_Service {
             'internal_server_error',
             'bad_gateway',
             'gateway_timeout',
-            'verification_failed',
+            'verification_failed', // Retryable - we'll try uploading again
             'api_error',
         );
 
