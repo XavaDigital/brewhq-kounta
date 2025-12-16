@@ -258,16 +258,17 @@ class Kounta_Order_Logs_Page {
                                         <?php foreach ($order_logs as $log): ?>
                                             <?php
                                             $parsed = $this->parse_log_entry($log);
-                                            $stage_class = $this->get_stage_class($parsed['stage']);
-                                            $stage_icon = $this->get_stage_icon($parsed['stage']);
+                                            $stage_class = $this->get_stage_class($parsed['stage'] ?: $parsed['type']);
+                                            $stage_icon = $parsed['stage'] ? $this->get_stage_icon($parsed['stage']) : $this->get_type_icon($parsed['type']);
+                                            $display_stage = $parsed['stage'] ?: $parsed['type'];
                                             ?>
                                             <div class="log-entry <?php echo esc_attr($stage_class); ?>">
                                                 <div class="log-entry-header">
                                                     <span class="log-entry-number">Entry #<?php echo $entry_counter--; ?></span>
-                                                    <?php if ($parsed['stage']): ?>
+                                                    <?php if ($display_stage): ?>
                                                         <span class="log-entry-stage">
                                                             <span class="stage-icon"><?php echo $stage_icon; ?></span>
-                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
+                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $display_stage))); ?></span>
                                                         </span>
                                                     <?php endif; ?>
                                                     <?php if ($parsed['timestamp']): ?>
@@ -276,8 +277,87 @@ class Kounta_Order_Logs_Page {
                                                         </span>
                                                     <?php endif; ?>
                                                 </div>
-                                                <div class="log-entry-content">
-                                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                <div class="log-entry-body">
+                                                    <div class="log-entry-columns">
+                                                        <!-- Column 1: Order Info -->
+                                                        <div class="log-column log-column-order-info">
+                                                            <?php if ($parsed['order_id']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Order ID:</span>
+                                                                    <span class="log-field-value">#<?php echo esc_html($parsed['order_id']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['order_total']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Total:</span>
+                                                                    <span class="log-field-value">$<?php echo esc_html($parsed['order_total']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['customer_email']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Customer:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['customer_email']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+
+                                                        <!-- Column 2: Status -->
+                                                        <div class="log-column log-column-status">
+                                                            <?php if ($parsed['order_status']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Status:</span>
+                                                                    <span class="log-field-value log-status-badge status-<?php echo esc_attr($parsed['order_status']); ?>">
+                                                                        <?php echo esc_html($parsed['order_status']); ?>
+                                                                    </span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['method'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Method:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['method']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['endpoint'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Endpoint:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['endpoint']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['http_code'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">HTTP Code:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['http_code']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['duration'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Duration:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['duration']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+
+                                                        <!-- Column 3: Data/Message -->
+                                                        <div class="log-column log-column-data">
+                                                            <?php if ($parsed['message']): ?>
+                                                                <div class="log-message">
+                                                                    <?php echo esc_html($parsed['message']); ?>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['data']): ?>
+                                                                <details class="log-data-details">
+                                                                    <summary>View Details</summary>
+                                                                    <pre class="log-data-content"><?php echo esc_html($parsed['data']); ?></pre>
+                                                                </details>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- Full log toggle -->
+                                                    <details class="log-full-details">
+                                                        <summary>View Full Log Entry</summary>
+                                                        <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                    </details>
                                                 </div>
                                             </div>
                                         <?php endforeach; ?>
@@ -302,16 +382,17 @@ class Kounta_Order_Logs_Page {
                                         <?php foreach ($grouped_logs['separator'] as $log): ?>
                                             <?php
                                             $parsed = $this->parse_log_entry($log);
-                                            $stage_class = $this->get_stage_class($parsed['stage']);
-                                            $stage_icon = $this->get_stage_icon($parsed['stage']);
+                                            $stage_class = $this->get_stage_class($parsed['stage'] ?: $parsed['type']);
+                                            $stage_icon = $parsed['stage'] ? $this->get_stage_icon($parsed['stage']) : $this->get_type_icon($parsed['type']);
+                                            $display_stage = $parsed['stage'] ?: $parsed['type'];
                                             ?>
                                             <div class="log-entry <?php echo esc_attr($stage_class); ?> log-entry-separator" style="margin-bottom: 12px;">
                                                 <div class="log-entry-header">
                                                     <span class="log-entry-number">Entry #<?php echo $entry_counter--; ?></span>
-                                                    <?php if ($parsed['stage']): ?>
+                                                    <?php if ($display_stage): ?>
                                                         <span class="log-entry-stage">
                                                             <span class="stage-icon"><?php echo $stage_icon; ?></span>
-                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $parsed['stage']))); ?></span>
+                                                            <span class="stage-text"><?php echo esc_html(strtoupper(str_replace('_', ' ', $display_stage))); ?></span>
                                                         </span>
                                                     <?php endif; ?>
                                                     <?php if ($parsed['timestamp']): ?>
@@ -320,8 +401,87 @@ class Kounta_Order_Logs_Page {
                                                         </span>
                                                     <?php endif; ?>
                                                 </div>
-                                                <div class="log-entry-content">
-                                                    <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                <div class="log-entry-body">
+                                                    <div class="log-entry-columns">
+                                                        <!-- Column 1: Order Info -->
+                                                        <div class="log-column log-column-order-info">
+                                                            <?php if ($parsed['order_id']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Order ID:</span>
+                                                                    <span class="log-field-value">#<?php echo esc_html($parsed['order_id']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['order_total']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Total:</span>
+                                                                    <span class="log-field-value">$<?php echo esc_html($parsed['order_total']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['customer_email']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Customer:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['customer_email']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+
+                                                        <!-- Column 2: Status -->
+                                                        <div class="log-column log-column-status">
+                                                            <?php if ($parsed['order_status']): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Status:</span>
+                                                                    <span class="log-field-value log-status-badge status-<?php echo esc_attr($parsed['order_status']); ?>">
+                                                                        <?php echo esc_html($parsed['order_status']); ?>
+                                                                    </span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['method'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Method:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['method']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['endpoint'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Endpoint:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['endpoint']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['http_code'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">HTTP Code:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['http_code']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if (isset($parsed['duration'])): ?>
+                                                                <div class="log-field">
+                                                                    <span class="log-field-label">Duration:</span>
+                                                                    <span class="log-field-value"><?php echo esc_html($parsed['duration']); ?></span>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+
+                                                        <!-- Column 3: Data/Message -->
+                                                        <div class="log-column log-column-data">
+                                                            <?php if ($parsed['message']): ?>
+                                                                <div class="log-message">
+                                                                    <?php echo esc_html($parsed['message']); ?>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <?php if ($parsed['data']): ?>
+                                                                <details class="log-data-details">
+                                                                    <summary>View Details</summary>
+                                                                    <pre class="log-data-content"><?php echo esc_html($parsed['data']); ?></pre>
+                                                                </details>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- Full log toggle -->
+                                                    <details class="log-full-details">
+                                                        <summary>View Full Log Entry</summary>
+                                                        <pre class="log-entry-full-text"><?php echo esc_html($log); ?></pre>
+                                                    </details>
                                                 </div>
                                             </div>
                                         <?php endforeach; ?>
@@ -462,14 +622,24 @@ class Kounta_Order_Logs_Page {
     private function parse_log_entry($log) {
         $parsed = array(
             'timestamp' => '',
+            'type' => '',
             'stage' => '',
             'order_id' => '',
+            'order_total' => '',
+            'order_status' => '',
+            'customer_email' => '',
             'message' => '',
+            'data' => '',
         );
 
-        // Extract timestamp
-        if (preg_match('/\[([^\]]+)\]/', $log, $matches)) {
+        // Extract timestamp - look for [YYYY-MM-DD HH:MM:SS] pattern at the start
+        if (preg_match('/\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]/', $log, $matches)) {
             $parsed['timestamp'] = $matches[1];
+        }
+
+        // Extract type (LOG, API_REQUEST, API_RESPONSE, etc.)
+        if (preg_match('/\]\s+([A-Z_]+)/', $log, $matches)) {
+            $parsed['type'] = trim($matches[1]);
         }
 
         // Extract stage - more flexible pattern
@@ -482,9 +652,48 @@ class Kounta_Order_Logs_Page {
             $parsed['order_id'] = trim($matches[1]);
         }
 
+        // Extract order total
+        if (preg_match('/ORDER\s+TOTAL:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+            $parsed['order_total'] = trim($matches[1]);
+        }
+
+        // Extract order status
+        if (preg_match('/ORDER\s+STATUS:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+            $parsed['order_status'] = trim($matches[1]);
+        }
+
+        // Extract customer email
+        if (preg_match('/CUSTOMER\s+EMAIL:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+            $parsed['customer_email'] = trim($matches[1]);
+        }
+
         // Extract message from DATA section
         if (preg_match('/"message":\s*"([^"]+)"/', $log, $matches)) {
             $parsed['message'] = trim($matches[1]);
+        }
+
+        // Extract DATA section
+        if (preg_match('/DATA:\s*[\r\n]+(.*?)(?=\n\n|\n[A-Z]+:|$)/s', $log, $matches)) {
+            $parsed['data'] = trim($matches[1]);
+        }
+
+        // For API_REQUEST/API_RESPONSE, extract relevant fields
+        if ($parsed['type'] === 'API_REQUEST') {
+            if (preg_match('/METHOD:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+                $parsed['method'] = trim($matches[1]);
+            }
+            if (preg_match('/ENDPOINT:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+                $parsed['endpoint'] = trim($matches[1]);
+            }
+        }
+
+        if ($parsed['type'] === 'API_RESPONSE') {
+            if (preg_match('/HTTP\s+CODE:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+                $parsed['http_code'] = trim($matches[1]);
+            }
+            if (preg_match('/DURATION:\s*[\r\n]+([^\r\n]+)/', $log, $matches)) {
+                $parsed['duration'] = trim($matches[1]);
+            }
         }
 
         return $parsed;
@@ -499,6 +708,7 @@ class Kounta_Order_Logs_Page {
     private function get_stage_class($stage) {
         $classes = array(
             'success' => 'log-stage-success',
+            'verification_success' => 'log-stage-success',
             'duplicate_prevented' => 'log-stage-prevented',
             'duplicate_found' => 'log-stage-prevented',
             'duplicate_attempt' => 'log-stage-warning',
@@ -508,6 +718,10 @@ class Kounta_Order_Logs_Page {
             'prepare' => 'log-stage-info',
             'prepared' => 'log-stage-info',
             'upload_attempt' => 'log-stage-info',
+            'verification_attempt' => 'log-stage-info',
+            'verification_retry' => 'log-stage-info',
+            'verification_exhausted' => 'log-stage-warning',
+            'verification_failed' => 'log-stage-error',
             'failure' => 'log-stage-error',
             'ORDER_FAILURE' => 'log-stage-error',
         );
@@ -524,6 +738,7 @@ class Kounta_Order_Logs_Page {
     private function get_stage_icon($stage) {
         $icons = array(
             'success' => '✅',
+            'verification_success' => '✅',
             'duplicate_prevented' => '🛡️',
             'duplicate_found' => '🛡️',
             'duplicate_attempt' => '⚠️',
@@ -533,11 +748,31 @@ class Kounta_Order_Logs_Page {
             'prepare' => '📋',
             'prepared' => '📋',
             'upload_attempt' => '📤',
+            'verification_attempt' => '🔍',
+            'verification_retry' => '🔄',
+            'verification_exhausted' => '⚠️',
+            'verification_failed' => '❌',
             'failure' => '❌',
             'ORDER_FAILURE' => '❌',
         );
 
         return isset($icons[$stage]) ? $icons[$stage] : '📝';
+    }
+
+    /**
+     * Get icon for log type
+     *
+     * @param string $type Log type
+     * @return string Icon HTML
+     */
+    private function get_type_icon($type) {
+        $icons = array(
+            'API_REQUEST' => '📡',
+            'API_RESPONSE' => '📨',
+            'LOG' => '📝',
+        );
+
+        return isset($icons[$type]) ? $icons[$type] : '📝';
     }
 }
 

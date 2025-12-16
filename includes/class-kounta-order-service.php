@@ -480,7 +480,7 @@ class Kounta_Order_Service {
      */
     private function verify_order_creation_with_retries($order_data, $order_id) {
         $max_verification_attempts = 4;
-        $delays = array(1, 2, 3, 5); // Seconds to wait before each attempt
+        $delays = array(5, 3, 3, 5); // Seconds to wait before each attempt (total 16s)
 
         for ($i = 0; $i < $max_verification_attempts; $i++) {
             // Wait before checking (increasing delays for eventual consistency)

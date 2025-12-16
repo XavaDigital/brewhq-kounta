@@ -244,21 +244,33 @@ class Kounta_Order_Logger {
         }
 
         $content = file_get_contents($log_file);
-        $entries = explode(str_repeat('=', 80), $content);
 
-        // Parse entries
+        // Split by double separator pattern to get complete entries
+        // Format is: \n===\n[timestamp] TYPE\n===\nFIELDS\n
+        $separator = str_repeat('=', 80);
+        $pattern = '/\n' . preg_quote($separator, '/') . '\n(\[[^\]]+\][^\n]*)\n' . preg_quote($separator, '/') . '\n/';
+
+        // Split content and capture timestamps
+        $parts = preg_split($pattern, $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        // Reconstruct entries with timestamps
         $parsed_entries = array();
-        foreach ($entries as $entry) {
-            if (trim($entry) === '') {
-                continue;
-            }
+        for ($i = 1; $i < count($parts); $i += 2) {
+            if (isset($parts[$i]) && isset($parts[$i + 1])) {
+                $timestamp_line = $parts[$i];
+                $entry_content = $parts[$i + 1];
 
-            // Filter by order ID if specified
-            if ($order_id && strpos($entry, "ORDER_ID:\n{$order_id}") === false) {
-                continue;
-            }
+                // Combine timestamp and content
+                $full_entry = $timestamp_line . "\n" . $separator . "\n" . $entry_content;
 
-            $parsed_entries[] = $entry;
+                // Filter by order ID if specified
+                if ($order_id && strpos($full_entry, "ORDER ID:\n{$order_id}") === false
+                    && strpos($full_entry, "ORDER_ID:\n{$order_id}") === false) {
+                    continue;
+                }
+
+                $parsed_entries[] = $full_entry;
+            }
         }
 
         // Return most recent entries

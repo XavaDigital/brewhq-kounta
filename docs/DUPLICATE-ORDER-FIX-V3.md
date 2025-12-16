@@ -43,7 +43,7 @@ We now implement a **two-level retry strategy** that handles both eventual consi
 
 When the API returns `null`, we verify the order was created with **4 verification attempts**:
 
-- Delays: 1s, 2s, 3s, 5s (total 11 seconds)
+- Delays: 5s, 3s, 3s, 5s (total 16 seconds)
 - Each verification searches Kounta for the order by sale number
 - Returns success as soon as order is found
 - Returns `verification_failed` only if all 4 attempts fail
@@ -73,16 +73,15 @@ This approach:
 Upload Attempt #1
   ├─ Make API call
   ├─ API returns null
-  ├─ Verification attempt #1 (1s) → Not found
-  ├─ Verification attempt #2 (2s) → Found! ✅
+  ├─ Verification attempt #1 (5s) → Found! ✅
   └─ Return order ID → SUCCESS
 
-OR (if verification fails):
+OR (if verification fails on first attempt):
 
 Upload Attempt #1
   ├─ Make API call
   ├─ API returns null
-  ├─ Verification attempts #1-4 (11s) → Not found
+  ├─ Verification attempts #1-4 (16s) → Not found
   └─ Return verification_failed
 
 Upload Attempt #2 (after 2s delay)
@@ -113,14 +112,13 @@ Upload Attempts #1, #2
 ### Scenario 1: Normal Upload (API returns null, eventual consistency)
 
 1. **Upload attempt #1** → API returns null
-2. Verification attempt #1 (1s) → Not found
-3. Verification attempt #2 (2s) → **Found!**
-4. **Result: No duplicate, order uploaded once ✅**
+2. Verification attempt #1 (5s) → **Found!**
+3. **Result: No duplicate, order uploaded once ✅**
 
 ### Scenario 2: Slow Eventual Consistency
 
 1. **Upload attempt #1** → API returns null
-2. Verification attempts #1-4 (11s) → Not found
+2. Verification attempts #1-4 (16s) → Not found
 3. **Upload attempt #2** (2s delay) → Duplicate check finds order from attempt #1
 4. **Result: No duplicate, order uploaded once ✅**
 
