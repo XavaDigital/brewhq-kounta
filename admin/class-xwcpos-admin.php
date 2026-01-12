@@ -24,6 +24,11 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
             add_action( 'posts_orderby', array($this,'xwcpos_item_id_orderby'), 10, 2 );
             add_filter('posts_join_paged', array($this,'xwcpos_item_id_join_paged'),10, 2);
 
+            // Enable searching by Kounta Product ID
+            add_filter('posts_search', array($this, 'xwcpos_search_by_product_id'), 10, 2);
+            add_filter('posts_join', array($this, 'xwcpos_search_join'), 10, 2);
+            add_filter('posts_groupby', array($this, 'xwcpos_search_groupby'), 10, 2);
+
             add_filter( 'manage_edit-shop_order_columns', array($this, 'xwcpos_admin_order_id_column'), 9999 );
             add_action( 'manage_shop_order_posts_custom_column', array($this, 'xwcpos_admin_order_id_column_content'), 10, 2 );
             add_filter( 'manage_edit-shop_order_sortable_columns', array($this, 'sortable_order_id_column') );
@@ -725,6 +730,85 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
                         # Use provided statement instead
                         return $join_paged_statement;
                     }
+            }
+
+            /**
+             * Extend product search to include Kounta Product ID
+             */
+            function xwcpos_search_by_product_id($search, $wp_query) {
+                global $wpdb, $pagenow;
+
+                // Only apply on product admin page
+                if (!is_admin() || $pagenow !== 'edit.php' || $wp_query->get('post_type') !== 'product') {
+                    return $search;
+                }
+
+                // Only apply when there's a search term
+                $search_term = $wp_query->get('s');
+                if (empty($search_term)) {
+                    return $search;
+                }
+
+                // Get the original search
+                $search_term = $wpdb->esc_like($search_term);
+
+                // Add Kounta Product ID to the search
+                // This modifies the WHERE clause to also search in the _xwcpos_item_id meta field
+                if (!empty($search)) {
+                    $search = preg_replace(
+                        '/\(\(\(.*?\)\)\)/s',
+                        '($0 OR (kounta_meta.meta_key = \'_xwcpos_item_id\' AND kounta_meta.meta_value LIKE \'%' . $search_term . '%\'))',
+                        $search
+                    );
+                }
+
+                return $search;
+            }
+
+            /**
+             * Join postmeta table for Kounta Product ID search
+             */
+            function xwcpos_search_join($join, $wp_query) {
+                global $wpdb, $pagenow;
+
+                // Only apply on product admin page with search
+                if (!is_admin() || $pagenow !== 'edit.php' || $wp_query->get('post_type') !== 'product') {
+                    return $join;
+                }
+
+                $search_term = $wp_query->get('s');
+                if (empty($search_term)) {
+                    return $join;
+                }
+
+                // Join the postmeta table to search Kounta Product ID
+                $join .= " LEFT JOIN {$wpdb->postmeta} AS kounta_meta ON {$wpdb->posts}.ID = kounta_meta.post_id ";
+
+                return $join;
+            }
+
+            /**
+             * Group by post ID to avoid duplicate results
+             */
+            function xwcpos_search_groupby($groupby, $wp_query) {
+                global $wpdb, $pagenow;
+
+                // Only apply on product admin page with search
+                if (!is_admin() || $pagenow !== 'edit.php' || $wp_query->get('post_type') !== 'product') {
+                    return $groupby;
+                }
+
+                $search_term = $wp_query->get('s');
+                if (empty($search_term)) {
+                    return $groupby;
+                }
+
+                // Group by post ID to prevent duplicates from the meta join
+                if (empty($groupby)) {
+                    $groupby = "{$wpdb->posts}.ID";
+                }
+
+                return $groupby;
             }
 
     }

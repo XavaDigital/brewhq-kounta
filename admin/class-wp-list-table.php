@@ -346,7 +346,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             if (!empty($_REQUEST['s'])) {
                 $search = $wpdb->esc_like($_REQUEST['s']);
                 $where_clauses[] = $wpdb->prepare(
-                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s)",
+                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s OR item.item_id LIKE %s)",
+                    '%' . $search . '%',
                     '%' . $search . '%',
                     '%' . $search . '%',
                     '%' . $search . '%'
@@ -450,7 +451,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             if (!empty($_REQUEST['s'])) {
                 $search = $wpdb->esc_like($_REQUEST['s']);
                 $where_clauses[] = $wpdb->prepare(
-                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s)",
+                    "(item.name LIKE %s OR item.sku LIKE %s OR item.description LIKE %s OR item.item_id LIKE %s)",
+                    '%' . $search . '%',
                     '%' . $search . '%',
                     '%' . $search . '%',
                     '%' . $search . '%'
@@ -636,6 +638,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 'product_name' => esc_html__('Name', 'xwcpos'),
                 'product_price' => esc_html__('Price', 'xwcpos'),
                 'product_sku' => esc_html__('SKU', 'xwcpos'),
+                'product_kounta_id' => esc_html__('Kounta Product #', 'xwcpos'),
                 'product_inventory' => esc_html__('Inventory', 'xwcpos'),
                 'product_category' => esc_html__('Category', 'xwcpos'),
                 'product_last_import' => esc_html__('Import Date', 'xwcpos'),
@@ -655,6 +658,8 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                     return $item->product_name;
                 case 'product_sku':
                     return $item->product_sku;
+                case 'product_kounta_id':
+                    return $item->product_ls_id;
                 case 'product_price':
                     return $item->product_price;
                 case 'product_inventory':
@@ -806,6 +811,16 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             //}
         }
 
+        public function column_product_kounta_id($item)
+        {
+            if (!empty($item->product_ls_id)) {
+                return '<span style="font-family: monospace; color: #2271b1; font-weight: 600;">' .
+                       esc_html($item->product_ls_id) .
+                       '</span>';
+            }
+            return '–';
+        }
+
         public function column_product_category($item)
         {
 
@@ -872,6 +887,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $sortable_columns = array(
                 'product_name' => array('product_name', true),
                 'product_sku' => array('product_sku', true),
+                'product_kounta_id' => array('product_ls_id', true),
                 'product_inventory' => array('product_inventory', true),
                 'product_last_import' => array('product_last_import', true),
                 'product_last_sync' => array('product_last_sync', true),
