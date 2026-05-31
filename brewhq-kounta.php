@@ -658,6 +658,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         public function xwcposImpProds()
         {
+            set_time_limit(0);
             $items = $this->xwcpos_fetch_simple_items();
             $inventory = $this->get_kounta_inventory();
 
@@ -1039,41 +1040,42 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $fullitem = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products/' . $item->id, 'Read');
 
-            $inv = array_search($fullitem->id, array_column($inventory,'id'));
-            $stock = $inventory[$inv]->stock;
-
-            if($fullitem){
-                //collect product data for adding to database
-                $mysql_args = $this->xwcpos_get_item_database_entries($fullitem);
-
-                //insert into database
-                $wpdb->insert($wpdb->xwcpos_items, $mysql_args, '');
-
-                //the id of the record just added
-                $xwcpos_last_insert_id = $wpdb->insert_id;
-
-                //Insert shop items
-                $shops = $this->xwcpos_add_shops_item($fullitem, $xwcpos_last_insert_id, $stock);
-                //Item Prices
-                $prices = $this->xwcpos_add_item_prices($fullitem, $xwcpos_last_insert_id);
-
-                if(!$shops || !$prices){
-                    //delete the item because something went wrong
-                    $wpdb->delete( $wpdb->xwcpos_items, " WHERE id = $xwcpos_last_insert_id" );
-                    if($shops){
-                        $wpdb->delete( $wpdb->xwcpos_item_shops, " WHERE id = $xwcpos_last_insert_id" );
-                    }
-                    if($prices){
-                        $wpdb->delete( $wpdb->xwcpos_item_prices, " WHERE id = $xwcpos_last_insert_id" );
-                    }
-                    return;
-
-                }
-
-                return $xwcpos_last_insert_id;
+            if(!$fullitem || isset($fullitem->error)){
+                $this->plugin_log('Failed to fetch full product details for item id: ' . $item->id . ' - skipping');
+                return;
             }
 
-            die();
+            $inv = array_search($fullitem->id, array_column($inventory,'id'));
+            $stock = isset($inventory[$inv]->stock) ? $inventory[$inv]->stock : 0;
+
+            //collect product data for adding to database
+            $mysql_args = $this->xwcpos_get_item_database_entries($fullitem);
+
+            //insert into database
+            $wpdb->insert($wpdb->xwcpos_items, $mysql_args, '');
+
+            //the id of the record just added
+            $xwcpos_last_insert_id = $wpdb->insert_id;
+
+            //Insert shop items
+            $shops = $this->xwcpos_add_shops_item($fullitem, $xwcpos_last_insert_id, $stock);
+            //Item Prices
+            $prices = $this->xwcpos_add_item_prices($fullitem, $xwcpos_last_insert_id);
+
+            if(!$shops || !$prices){
+                //delete the item because something went wrong
+                $wpdb->delete( $wpdb->xwcpos_items, " WHERE id = $xwcpos_last_insert_id" );
+                if($shops){
+                    $wpdb->delete( $wpdb->xwcpos_item_shops, " WHERE id = $xwcpos_last_insert_id" );
+                }
+                if($prices){
+                    $wpdb->delete( $wpdb->xwcpos_item_prices, " WHERE id = $xwcpos_last_insert_id" );
+                }
+                return;
+
+            }
+
+            return $xwcpos_last_insert_id;
         }
 
         public function xwcpos_item_already_exists($item)
