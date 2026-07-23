@@ -1309,6 +1309,12 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 if ($product_image != false) {
                   if (!empty($product_image)) {
                     $result = set_post_thumbnail($post_id, $product_image);
+                    // Record the source URL and attachment so the image sync
+                    // service doesn't re-download this image on the next sync
+                    if (isset($item->image)) {
+                      update_post_meta($post_id, '_xwcpos_image_url', $item->image);
+                      update_post_meta($post_id, '_xwcpos_image_attachment_id', $product_image);
+                    }
                   }
                 }
               }
