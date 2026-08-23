@@ -419,6 +419,14 @@ class Kounta_Sync_Service {
         $k_product = $this->api_client->make_request($endpoint);
 
         if (is_wp_error($k_product)) {
+            $error_data = $k_product->get_error_data();
+            $http_code = (is_array($error_data) && isset($error_data['http_code'])) ? intval($error_data['http_code']) : 0;
+
+            // 404 means the product no longer exists in Kounta
+            if ($http_code === 404) {
+                return $this->handle_missing_product($item);
+            }
+
             $this->log('ERROR: Failed to fetch product ' . $item->item_id . ' from Kounta API - ' . $k_product->get_error_message());
             return false;
         }
@@ -427,6 +435,9 @@ class Kounta_Sync_Service {
             $this->log('ERROR: Empty response when fetching product ' . $item->item_id . ' from Kounta API');
             return false;
         }
+
+        // Product exists in Kounta — clear any missing-product flags from earlier runs
+        $this->clear_missing_product_flags($item);
 
         // Find the site data for this specific site
         $site_data = null;
@@ -585,6 +596,18 @@ class Kounta_Sync_Service {
         }
 
         // Update sync timestamp
+        return $this->touch_sync_timestamp($item);
+    }
+
+    /**
+     * Record that an item has been synced so it moves to the back of the
+     * oldest-first queue.
+     *
+     * @param object $item Product item from database
+     * @return bool Success status
+     */
+    private function touch_sync_timestamp($item) {
+        global $wpdb;
         $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
         $result = $wpdb->update(
             $wpdb->xwcpos_items,
@@ -598,6 +621,133 @@ class Kounta_Sync_Service {
         }
 
         return true;
+    }
+
+    /**
+     * Handle a product that Kounta reports as not found (HTTP 404).
+     *
+     * Counts consecutive misses on the WooCommerce product. Once the miss
+     * count reaches the threshold (default 3, filter
+     * 'xwcpos_missing_product_threshold'), the product is set to stock 0 /
+     * out of stock and its status is changed to draft (private for
+     * variations), and the item is moved to the back of the sync queue so it
+     * is no longer retried every run.
+     *
+     * @param object $item Product item from database
+     * @return bool Success status
+     */
+    private function handle_missing_product($item) {
+        if (empty($item->wc_prod_id)) {
+            $this->log('WARNING: Product ' . $item->item_id . ' not found in Kounta (404) and has no WooCommerce product; skipping');
+            return $this->touch_sync_timestamp($item);
+        }
+
+        $product_id = intval($item->wc_prod_id);
+        $threshold = max(1, intval(apply_filters('xwcpos_missing_product_threshold', 3)));
+        $count = intval(get_post_meta($product_id, '_xwcpos_missing_count', true)) + 1;
+        update_post_meta($product_id, '_xwcpos_missing_count', $count);
+
+        if ($count < $threshold) {
+            $this->log(sprintf(
+                'WARNING: Product %s (wc_prod_id=%d) not found in Kounta (404) — miss %d of %d, no action yet',
+                $item->item_id, $product_id, $count, $threshold
+            ));
+            // Leave the sync timestamp alone so the product is re-checked next run
+            return false;
+        }
+
+        if (get_post_meta($product_id, '_xwcpos_missing_from_kounta', true)) {
+            // Already handled on an earlier run; just keep it cycling normally
+            return $this->touch_sync_timestamp($item);
+        }
+
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            $this->log('ERROR: Could not load WooCommerce product ' . $product_id . ' to mark it missing from Kounta');
+            return $this->touch_sync_timestamp($item);
+        }
+
+        $new_status = $product->is_type('variation') ? 'private' : 'draft';
+        $previous_status = $product->get_status();
+
+        $product->set_manage_stock(true);
+        $product->set_stock_quantity(0);
+        $product->set_stock_status('outofstock');
+        $product->set_status($new_status);
+        $product->save();
+
+        // Remember what we changed and under which Kounta ID, so the product
+        // can be restored automatically if that same ID comes back
+        update_post_meta($product_id, '_xwcpos_missing_from_kounta', current_time('mysql'));
+        update_post_meta($product_id, '_xwcpos_missing_item_id', $item->item_id);
+        update_post_meta($product_id, '_xwcpos_status_before_missing', $previous_status);
+
+        $this->log(sprintf(
+            'Product %s (wc_prod_id=%d) missing from Kounta after %d consecutive checks — set out of stock and status "%s"',
+            $item->item_id, $product_id, $count, $new_status
+        ));
+
+        return $this->touch_sync_timestamp($item);
+    }
+
+    /**
+     * Clear missing-product tracking when a product is found in Kounta again.
+     *
+     * If handle_missing_product() drafted the product and the SAME Kounta ID
+     * is answering again, the earlier 404s were an error and the product's
+     * previous status is restored automatically (the stock sync that follows
+     * sets the real stock level). If the product was re-linked to a different
+     * Kounta ID (e.g. recreated in Kounta and matched by SKU on import), it is
+     * left as draft and a log line asks for manual review.
+     *
+     * @param object $item Product item from database
+     */
+    private function clear_missing_product_flags($item) {
+        if (empty($item->wc_prod_id)) {
+            return;
+        }
+
+        $product_id = intval($item->wc_prod_id);
+
+        if (get_post_meta($product_id, '_xwcpos_missing_count', true) === '') {
+            return;
+        }
+
+        delete_post_meta($product_id, '_xwcpos_missing_count');
+
+        $missing_since = get_post_meta($product_id, '_xwcpos_missing_from_kounta', true);
+        if (!$missing_since) {
+            return;
+        }
+
+        $missing_item_id = get_post_meta($product_id, '_xwcpos_missing_item_id', true);
+        $previous_status = get_post_meta($product_id, '_xwcpos_status_before_missing', true);
+
+        delete_post_meta($product_id, '_xwcpos_missing_from_kounta');
+        delete_post_meta($product_id, '_xwcpos_missing_item_id');
+        delete_post_meta($product_id, '_xwcpos_status_before_missing');
+
+        if ((string) $missing_item_id !== (string) $item->item_id) {
+            $this->log(sprintf(
+                'Product wc_prod_id=%d is now linked to Kounta ID %s (was marked missing under ID %s on %s) — left as draft/out of stock, review and publish manually',
+                $product_id, $item->item_id, $missing_item_id, $missing_since
+            ));
+            return;
+        }
+
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            return;
+        }
+
+        $restore_status = $previous_status ? $previous_status : 'publish';
+        $product->set_status($restore_status);
+        $product->save();
+
+        $this->log(sprintf(
+            'Product %s (wc_prod_id=%d) is back in Kounta under the same ID (marked missing on %s) — status restored to "%s"; stock will be updated by this sync',
+            $item->item_id, $product_id, $missing_since, $restore_status
+        ));
     }
 
     /**
