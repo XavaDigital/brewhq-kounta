@@ -39,7 +39,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Import_Products')) {
 			</div>
 
 			<div class="loadbtu">
-				<a href="javascript:void(0)" class="button button-primary button-large" onclick="xwcpos_importPros()"><?php echo esc_html__("Load Kounta Products", "xwcpos"); ?></a>
+				<a href="javascript:void(0)" id="xwcpos-load-products-btn" class="button button-primary button-large" onclick="xwcpos_importPros()"><?php echo esc_html__("Load Kounta Products", "xwcpos"); ?></a>
         <a href="javascript:void(0)" class="button button-primary button-large" onclick="xwcpos_syncAllProducts()"><?php echo esc_html__("Sync All Products", "xwcpos"); ?></a>
         <a href="javascript:void(0)" class="button button-primary button-large" onclick="xwcpos_syncAllProductsOptimized()" style="background-color: #00a32a; border-color: #00a32a;"><?php echo esc_html__("⚡ Optimized Sync (Fast)", "xwcpos"); ?></a>
         <a href="javascript:void(0)" class="button button-large" onclick="xwcpos_showDebugLog()" style="margin-left: 20px;"><?php echo esc_html__("📋 View Debug Log", "xwcpos"); ?></a>

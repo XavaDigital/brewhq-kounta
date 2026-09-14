@@ -659,54 +659,135 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         public function xwcposImpProds()
         {
             set_time_limit(0);
-            $items = $this->xwcpos_fetch_simple_items();
-            $inventory = $this->get_kounta_inventory();
 
-            if (isset($items->error)) {
-                if($items->error == 'Limit exceeded'){
-                    echo json_encode(
-                        array(
-                            'err' => esc_html__("API limited exceeded. Please wait and try again later", "xwcpos"),
-                        )
-                    );
-                }else{
-                    echo json_encode(
-                        array(
-                            'err' => esc_html__($items . " Invalid access token. Please check API connection with Kounta POS.", "xwcpos"),
-                        )
-                    );
+            // Only one import may run at a time. INSERT IGNORE on the unique
+            // option_name is atomic, so of two simultaneous requests only one
+            // gets the lock. (add_option() is not safe for this: it uses
+            // ON DUPLICATE KEY UPDATE and can report success to both.)
+            global $wpdb;
+            $lock_key = 'xwcpos_import_lock';
+            $lock_timeout = 30 * MINUTE_IN_SECONDS;
+            $lock_token = time() . ':' . wp_generate_password(12, false);
+
+            $acquired = $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'off')",
+                $lock_key,
+                $lock_token
+            ));
+
+            if (!$acquired) {
+                $current = $wpdb->get_var($wpdb->prepare(
+                    "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+                    $lock_key
+                ));
+                $locked_at = intval($current);
+
+                // Take over a stale lock left by a run that died, but only if no
+                // other request has taken it over in the meantime
+                if ($current !== null && (time() - $locked_at) >= $lock_timeout) {
+                    $acquired = $wpdb->query($wpdb->prepare(
+                        "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s",
+                        $lock_token,
+                        $lock_key,
+                        $current
+                    ));
                 }
+
+                if (!$acquired) {
+                    $this->plugin_log('Import request ignored: another import started ' . (time() - $locked_at) . ' seconds ago is still running');
+                    echo json_encode(
+                        array(
+                            'err' => esc_html__("An import is already running. Please wait for it to finish before starting another.", "xwcpos"),
+                        )
+                    );
+                    exit();
+                }
+            }
+
+            // Released on every exit path, including fatal errors
+            register_shutdown_function(function () use ($lock_key, $lock_token) {
+                global $wpdb;
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
+                    $lock_key,
+                    $lock_token
+                ));
+            });
+
+            $this->plugin_log('/**** Product import started ****/');
+
+            $items = $this->xwcpos_fetch_simple_items();
+
+            if (!is_array($items)) {
+                $error = is_object($items) && isset($items->error) ? $items->error : 'Unexpected response from Kounta';
+                $this->plugin_log('Product import stopped while fetching the product list: ' . (is_string($error) ? $error : json_encode($error)));
+                if ($error === 'Limit exceeded') {
+                    $message = esc_html__("Kounta API limit reached while loading the product list. Please wait a minute and try again.", "xwcpos");
+                } else {
+                    $message = esc_html__("Could not load products from Kounta. Please check the API connection settings.", "xwcpos");
+                }
+                echo json_encode(array('err' => $message));
                 exit();
             }
 
-            // Add items to database
-            if (!isset($items->error) && count($items)>0) {
+            $inventory = $this->get_kounta_inventory();
 
-                $percent = ceil(count($items) / 100) * 100;
-                //echo $items->{'@attributes'}->count;
-                $count = count($items);
-                $xwcpos_items = $items;
+            $count = count($items);
+            $added = 0;
+            $existing = 0;
+            $failed = 0;
+            $rate_limited = false;
 
-                if (isset($xwcpos_items)) {
-                    if (is_object($xwcpos_items)) {
-                        $single_item = $xwcpos_items;
-                        $xwcpos_items = array($single_item);
-                    }
-
-                    foreach ($xwcpos_items as $item) {
-                        $this->xwcpos_insert_item($item, $inventory);
-                    }
+            foreach ($items as $item) {
+                if (!is_object($item)) {
+                    continue;
                 }
 
-                update_option('xwcpos_load_timestamp', date(DATE_ATOM));
+                $result = $this->xwcpos_insert_item($item, $inventory);
 
+                if (is_wp_error($result)) {
+                    if ($result->get_error_code() === 'rate_limited') {
+                        $rate_limited = true;
+                        break;
+                    }
+                    $failed++;
+                } elseif (is_array($result) && !empty($result['existing'])) {
+                    $existing++;
+                } elseif ($result) {
+                    $added++;
+                }
+            }
+
+            update_option('xwcpos_load_timestamp', date(DATE_ATOM));
+
+            $this->plugin_log(sprintf(
+                'Product import finished: %d products from Kounta, %d new added, %d already loaded, %d failed%s',
+                $count, $added, $existing, $failed, $rate_limited ? ', stopped early by API limit' : ''
+            ));
+
+            if ($rate_limited) {
                 echo json_encode(
                     array(
-                        'percent' => $percent,
-                        'count' => $count . esc_html__(" Products Imported/Updated Successfully!", "xwcpos"),
+                        'err' => sprintf(
+                            esc_html__("Kounta API limit reached. %d new products were added before stopping. Please wait a minute and click Load Kounta Products again to load the rest.", "xwcpos"),
+                            $added
+                        ),
                     )
                 );
+                exit();
             }
+
+            echo json_encode(
+                array(
+                    'percent' => 100,
+                    'count' => sprintf(
+                        esc_html__("%d new products added (%d already loaded%s).", "xwcpos"),
+                        $added,
+                        $existing,
+                        $failed ? sprintf(esc_html__(", %d failed - see debug log", "xwcpos"), $failed) : ''
+                    ),
+                )
+            );
 
             die();
         }
@@ -883,43 +964,32 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $site_id = get_option('xwcpos_site_id');
 
             while($products_remaining){
-                if(!$last_product_id){
-                    $paging = "";
-                } else {
-                    $paging = 'start='.$last_product_id;
-                }
+                $paging = $last_product_id ? 'start='.$last_product_id : '';
 
                 $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/sites/'.$site_id.'/inventory', 'Read', $paging);
 
-                if($new_products !== "Limit exceeded"){
-                    if($new_products !== null && $new_products !== "" && !isset($new_products->error)){
-                        $products = array_merge($products, $new_products);
-                        $last_product_id = end($products)->id;
-                    }
-                    // } else if (isset($new_products->error)){
-                    //   return $new_products;
-                    // }
-
-                    if(isset($new_products) && $new_products !== ""){
-                        $count = count($new_products);
-                        if($count < 100){
-                            $products_remaining = false;
-                        }
-                        // $page++;
+                if (!is_array($new_products)) {
+                    // Rate limit ("Limit exceeded") or any other error: return what we have.
+                    // Products missing from a partial list are given stock 0 on import and
+                    // corrected by the hourly inventory sync.
+                    if ($new_products === "Limit exceeded") {
+                        $this->plugin_log('API limit exceeded while getting inventory');
                     } else {
-                        $products_remaining = false;
+                        $reason = is_string($new_products) ? $new_products : (isset($new_products->error) ? json_encode($new_products->error) : 'unexpected response');
+                        $this->plugin_log('Stopped getting inventory: ' . substr($reason, 0, 200));
                     }
-                } else {
-                    $this->plugin_log('API limit exceeded while getting inventory');
-
-                    $products_remaining = false;
-                    //$return['error'] = "Limit exceeded";
-                    // if(count($products)>0){
-
-                    // }
+                    $this->plugin_log('Inventory list is incomplete (' . count($products) . ' items)');
                     return $products;
                 }
 
+                $products = array_merge($products, $new_products);
+                if (!empty($new_products)) {
+                    $last_product_id = end($new_products)->id;
+                }
+
+                if (count($new_products) < 100) {
+                    $products_remaining = false;
+                }
             }
 
             return $products;
@@ -928,67 +998,34 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 
         public function xwcpos_fetch_simple_items()
         {
-
-
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
 
-            // global $wpdb;
-            // $wpdb->xwcpos_item_categories = $wpdb->prefix . 'xwcpos_item_categories';
-            // $xwcpos_categories = $wpdb->get_results("SELECT * FROM " . $wpdb->xwcpos_item_categories);
-
-            // $products = array();
-
-            // foreach($xwcpos_categories as $cat){
-            //   $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/categories/'. $cat->cat_id . '/products', 'Read');
-            //   if(!isset($new_products->error)){
-            //     $products = array_merge($products, $new_products);
-            //   }
-
-            // }
-
-            // return $products;
-
-            //"https://api.kounta.com/v1/companies/27154/products.json?page=2"
-
-
             $products = array();
-            $products_remaining = true;
             $page = 1;
 
-            while($products_remaining){
+            while (true) {
                 $new_products = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products', 'Read', 'page='.$page);
 
-                if($new_products !== "Limit exceeded"){
-                    if($new_products !== null && !isset($new_products->error)){
-                        $products = array_merge($products, $new_products);
-                    } else if (isset($new_products->error)){
-                        return $new_products;
-                    }
-
-                    if(isset($new_products)){
-                        $count = count($new_products);
-                        if($count < 100){
-                            $products_remaining = false;
-                        }
-                        $page++;
-                    } else {
-                        $products_remaining = false;
-                    }
-                } else {
-                    $products_remaining = false;
-                    $return = array();
-                    $return->error = "Limit exceeded";
-                    return $return;
+                if ($new_products === "Limit exceeded") {
+                    return (object) array('error' => 'Limit exceeded');
                 }
 
+                if (!is_array($new_products)) {
+                    if (is_object($new_products) && isset($new_products->error)) {
+                        return $new_products;
+                    }
+                    return (object) array('error' => is_string($new_products) && $new_products !== '' ? $new_products : 'Unexpected response from Kounta');
+                }
+
+                $products = array_merge($products, $new_products);
+
+                if (count($new_products) < 100) {
+                    break;
+                }
+                $page++;
             }
 
-
             return $products;
-
-            //return $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products', 'Read');
-
-            wp_die();
         }
 
         public function xwcpos_fetch_variable_items()
@@ -1012,7 +1049,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             die();
         }
 
-        public function xwcpos_insert_item($item, $inventory)
+        public function xwcpos_insert_item($item, $inventory = array())
         {
 
             global $wpdb;
@@ -1020,39 +1057,52 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
             $wpdb->xwcpos_item_prices = $wpdb->prefix . 'xwcpos_item_prices';
-            // $wpdb->xwcpos_item_images = $wpdb->prefix . 'xwcpos_item_images';
-            // $wpdb->xwcpos_item_attributes = $wpdb->prefix . 'xwcpos_item_attributes';
-            // $wpdb->xwcpos_item_ecomm = $wpdb->prefix . 'xwcpos_item_ecomm';
 
             if ($item->name == "" || $item->name == null){
                 return;
             }
 
-            // Chceck if item in products table already
+            // Check if item in products table already
             $result = $this->xwcpos_item_already_exists($item);
 
             //if it is, then bail
             if ($result > 0) {
-                return $result;
+                return array('existing' => true, 'id' => $result);
             }
 
             //get detailed product data
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $fullitem = $this->xwcpos_make_api_call('companies/' . $xwcpos_account_id . '/products/' . $item->id, 'Read');
 
-            if(!$fullitem || isset($fullitem->error)){
-                $this->plugin_log('Failed to fetch full product details for item id: ' . $item->id . ' - skipping');
-                return;
+            if ($fullitem === "Limit exceeded") {
+                $this->plugin_log('API limit exceeded fetching full product details for item id: ' . $item->id . ' - stopping import');
+                return new WP_Error('rate_limited', 'Kounta API limit exceeded');
             }
 
-            $inv = array_search($fullitem->id, array_column($inventory,'id'));
-            $stock = isset($inventory[$inv]->stock) ? $inventory[$inv]->stock : 0;
+            if (!is_object($fullitem) || isset($fullitem->error) || empty($fullitem->id) || empty($fullitem->name)) {
+                $reason = is_string($fullitem) ? $fullitem : (is_object($fullitem) && isset($fullitem->error) ? json_encode($fullitem->error) : 'unexpected response');
+                $this->plugin_log('Failed to fetch full product details for item id: ' . $item->id . ' - skipping (' . substr($reason, 0, 200) . ')');
+                return new WP_Error('fetch_failed', $reason);
+            }
+
+            $stock = 0;
+            if (is_array($inventory) && !empty($inventory)) {
+                $inv = array_search($fullitem->id, array_column($inventory, 'id'));
+                if ($inv !== false && isset($inventory[$inv]->stock)) {
+                    $stock = $inventory[$inv]->stock;
+                } else {
+                    $this->plugin_log('Item id ' . $fullitem->id . ' not in inventory list - importing with stock 0 until the next inventory sync');
+                }
+            }
 
             //collect product data for adding to database
             $mysql_args = $this->xwcpos_get_item_database_entries($fullitem);
 
             //insert into database
-            $wpdb->insert($wpdb->xwcpos_items, $mysql_args, '');
+            if ($wpdb->insert($wpdb->xwcpos_items, $mysql_args) === false) {
+                $this->plugin_log('Failed to insert item id ' . $fullitem->id . ' into products table: ' . $wpdb->last_error);
+                return new WP_Error('insert_failed', $wpdb->last_error);
+            }
 
             //the id of the record just added
             $xwcpos_last_insert_id = $wpdb->insert_id;
@@ -1063,16 +1113,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $prices = $this->xwcpos_add_item_prices($fullitem, $xwcpos_last_insert_id);
 
             if(!$shops || !$prices){
-                //delete the item because something went wrong
-                $wpdb->delete( $wpdb->xwcpos_items, " WHERE id = $xwcpos_last_insert_id" );
-                if($shops){
-                    $wpdb->delete( $wpdb->xwcpos_item_shops, " WHERE id = $xwcpos_last_insert_id" );
-                }
-                if($prices){
-                    $wpdb->delete( $wpdb->xwcpos_item_prices, " WHERE id = $xwcpos_last_insert_id" );
-                }
-                return;
-
+                //remove the partial record because something went wrong
+                $wpdb->delete($wpdb->xwcpos_items, array('id' => $xwcpos_last_insert_id));
+                $wpdb->delete($wpdb->xwcpos_item_shops, array('xwcpos_item_id' => $xwcpos_last_insert_id));
+                $wpdb->delete($wpdb->xwcpos_item_prices, array('xwcpos_item_id' => $xwcpos_last_insert_id));
+                $this->plugin_log('Item id ' . $fullitem->id . ' has no site/price data in Kounta - not added');
+                return new WP_Error('no_site_data', 'Product has no site or price data');
             }
 
             return $xwcpos_last_insert_id;

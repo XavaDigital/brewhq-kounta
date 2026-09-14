@@ -94,8 +94,21 @@ function xwcpos_importCats() {
   });
 }
 
+var xwcpos_import_running = false;
+
 function xwcpos_importPros() {
   "use strict";
+
+  if (xwcpos_import_running) {
+    return;
+  }
+  xwcpos_import_running = true;
+
+  var button = jQuery("#xwcpos-load-products-btn");
+  var buttonLabel = button.text();
+  button.addClass("disabled").attr("aria-disabled", "true").css("pointer-events", "none").text("Loading products… please wait");
+  jQuery(".errosmessage").hide();
+  jQuery(".success_message").hide();
 
   jQuery(".spinner").show();
   var ajaxurl = xwcpos_php_vars.admin_url;
@@ -103,6 +116,18 @@ function xwcpos_importPros() {
     type: "POST",
     url: ajaxurl,
     data: { action: "xwcposImpProds" },
+    complete: function () {
+      xwcpos_import_running = false;
+      button.removeClass("disabled").removeAttr("aria-disabled").css("pointer-events", "").text(buttonLabel);
+      jQuery(".spinner").hide();
+    },
+    error: function (xhr, status) {
+      jQuery(".success_message").hide();
+      jQuery(".errosmessage").show();
+      jQuery(".errosmessage").html(
+        "<p>The import request did not finish (" + (status || "error") + "). It may still be running on the server — wait a minute, then reload this page before trying again.</p>"
+      );
+    },
     success: function (response) {
       var obj = {};
       //jQuery(".output").html("<pre>" + response + "</pre>");
