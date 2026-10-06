@@ -383,6 +383,14 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 }
             }
 
+            // Kounta status filter: products removed from Kounta are hidden unless asked for
+            $kounta_status = isset($_REQUEST['filter_kounta_status']) ? sanitize_text_field($_REQUEST['filter_kounta_status']) : 'active';
+            if ($kounta_status === 'active') {
+                $where_clauses[] = "COALESCE(item.deleted, '0') <> '1'";
+            } elseif ($kounta_status === 'deleted') {
+                $where_clauses[] = "item.deleted = '1'";
+            }
+
             // Stock status filter
             if (!empty($_REQUEST['filter_stock_status']) && $_REQUEST['filter_stock_status'] !== 'all') {
                 $stock_status = sanitize_text_field($_REQUEST['filter_stock_status']);
@@ -488,6 +496,14 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 }
             }
 
+            // Kounta status filter: products removed from Kounta are hidden unless asked for
+            $kounta_status = isset($_REQUEST['filter_kounta_status']) ? sanitize_text_field($_REQUEST['filter_kounta_status']) : 'active';
+            if ($kounta_status === 'active') {
+                $where_clauses[] = "COALESCE(item.deleted, '0') <> '1'";
+            } elseif ($kounta_status === 'deleted') {
+                $where_clauses[] = "item.deleted = '1'";
+            }
+
             // Stock status filter
             if (!empty($_REQUEST['filter_stock_status']) && $_REQUEST['filter_stock_status'] !== 'all') {
                 $stock_status = sanitize_text_field($_REQUEST['filter_stock_status']);
@@ -531,6 +547,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                           !empty($_REQUEST['filter_import_status']) ||
                           !empty($_REQUEST['filter_sync_status']) ||
                           !empty($_REQUEST['filter_stock_status']) ||
+                          !empty($_REQUEST['filter_kounta_status']) ||
                           !empty($_REQUEST['filter_price_min']) ||
                           !empty($_REQUEST['filter_price_max']) ||
                           !empty($_REQUEST['s']);
@@ -608,6 +625,20 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                     esc_html__('Stock', 'xwcpos'),
                     esc_html($status_labels[$_REQUEST['filter_stock_status']])
                 );
+            }
+
+            if (!empty($_REQUEST['filter_kounta_status']) && $_REQUEST['filter_kounta_status'] !== 'active') {
+                $status_labels = array(
+                    'deleted' => __('Removed from Kounta', 'xwcpos'),
+                    'all' => __('All', 'xwcpos'),
+                );
+                if (isset($status_labels[$_REQUEST['filter_kounta_status']])) {
+                    $active_filters[] = sprintf(
+                        '<strong>%s:</strong> %s',
+                        esc_html__('In Kounta', 'xwcpos'),
+                        esc_html($status_labels[$_REQUEST['filter_kounta_status']])
+                    );
+                }
             }
 
             if (!empty($_REQUEST['filter_price_min']) || !empty($_REQUEST['filter_price_max'])) {
@@ -929,6 +960,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
             $current_import_status = isset($_REQUEST['filter_import_status']) ? $_REQUEST['filter_import_status'] : 'all';
             $current_sync_status = isset($_REQUEST['filter_sync_status']) ? $_REQUEST['filter_sync_status'] : 'all';
             $current_stock_status = isset($_REQUEST['filter_stock_status']) ? $_REQUEST['filter_stock_status'] : 'all';
+            $current_kounta_status = isset($_REQUEST['filter_kounta_status']) ? $_REQUEST['filter_kounta_status'] : 'active';
             $current_price_min = isset($_REQUEST['filter_price_min']) ? $_REQUEST['filter_price_min'] : '';
             $current_price_max = isset($_REQUEST['filter_price_max']) ? $_REQUEST['filter_price_max'] : '';
             ?>
@@ -1010,6 +1042,16 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                         </select>
                     </div>
 
+                    <!-- Kounta Status Filter -->
+                    <div class="xwcpos-filter-group">
+                        <label for="filter-kounta-status"><?php esc_html_e('In Kounta:', 'xwcpos'); ?></label>
+                        <select name="filter_kounta_status" id="filter-kounta-status">
+                            <option value="active" <?php selected($current_kounta_status, 'active'); ?>><?php esc_html_e('Active in Kounta', 'xwcpos'); ?></option>
+                            <option value="deleted" <?php selected($current_kounta_status, 'deleted'); ?>><?php esc_html_e('Removed from Kounta', 'xwcpos'); ?></option>
+                            <option value="all" <?php selected($current_kounta_status, 'all'); ?>><?php esc_html_e('All', 'xwcpos'); ?></option>
+                        </select>
+                    </div>
+
                     <!-- Price Range Filter -->
                     <div class="xwcpos-filter-group">
                         <label><?php esc_html_e('Price:', 'xwcpos'); ?></label>
@@ -1026,6 +1068,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                     <!-- Clear Filters Button -->
                     <?php if (!empty($_REQUEST['filter_category']) || !empty($_REQUEST['filter_import_status']) ||
                               !empty($_REQUEST['filter_sync_status']) || !empty($_REQUEST['filter_stock_status']) ||
+                              !empty($_REQUEST['filter_kounta_status']) ||
                               !empty($_REQUEST['filter_price_min']) || !empty($_REQUEST['filter_price_max']) ||
                               !empty($_REQUEST['s'])): ?>
                         <a href="<?php echo esc_url(admin_url('admin.php?page=xwcpos-integration-products')); ?>" class="button">

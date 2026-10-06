@@ -3853,3 +3853,152 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
     $xwcpos_plugin_instance = new BrewHQ_Kounta_POS_Int();
 
 }
+
+if (defined('WP_CLI') && WP_CLI) {
+    class BrewHQ_Kounta_CLI {
+
+        /**
+         * List products that cannot be sent to Kounta on an order.
+         *
+         * Reports purchasable products (simple products and variations) that
+         * have no Kounta product ID, or whose Kounta product ID no longer
+         * exists in Kounta. Each row shows how many paid orders since --since
+         * contain the product and have not synced to Kounta.
+         *
+         * ## OPTIONS
+         *
+         * [--since=<date>]
+         * : Count unsynced orders placed on or after this date (Y-m-d). Default: 90 days ago.
+         *
+         * [--status=<statuses>]
+         * : Comma-separated product statuses to check. Default: publish,private
+         *
+         * [--format=<format>]
+         * : table, csv or json. Default: table
+         *
+         * [--draft]
+         * : Set every published product whose Kounta product is deleted or no
+         * longer exists to out of stock and draft (private for variations), the
+         * same way the hourly sync does. Products that are not published, and
+         * products with no Kounta ID, are not changed.
+         * Also flags those Kounta products as removed in the plugin's local
+         * product table, which hides them from the Import Products page.
+         *
+         * [--yes]
+         * : Skip the confirmation prompt for --draft.
+         *
+         * ## EXAMPLES
+         *
+         *     wp kounta missing-products
+         *     wp kounta missing-products --since=2026-01-01 --format=csv > missing-products.csv
+         *     wp kounta missing-products --draft
+         *
+         * @subcommand missing-products
+         */
+        public function missing_products($args, $assoc_args) {
+            $since = isset($assoc_args['since']) ? $assoc_args['since'] : gmdate('Y-m-d', strtotime('-90 days'));
+            $statuses = isset($assoc_args['status']) ? array_filter(array_map('trim', explode(',', $assoc_args['status']))) : array('publish', 'private');
+            $format = isset($assoc_args['format']) ? $assoc_args['format'] : 'table';
+            $quiet = ($format !== 'table');
+
+            $report = new Kounta_Missing_Products_Report();
+
+            $kounta_products = $report->fetch_kounta_products(function ($page, $total) use ($quiet) {
+                if (!$quiet) {
+                    WP_CLI::log(sprintf('Fetched Kounta products page %d (%d products so far)', $page, $total));
+                }
+            });
+
+            if (is_wp_error($kounta_products)) {
+                WP_CLI::error('Could not list Kounta products: ' . $kounta_products->get_error_message());
+            }
+            if (empty($kounta_products)) {
+                WP_CLI::error('Kounta returned no products, so every product would be reported. Check the API credentials.');
+            }
+
+            $problems = $report->find_problem_products($kounta_products, $statuses);
+            $unsynced_orders = $report->attach_unsynced_orders($problems, $since);
+
+            // Products blocking the most orders first
+            usort($problems, function ($a, $b) {
+                if ($a['unsynced_orders'] !== $b['unsynced_orders']) {
+                    return $b['unsynced_orders'] - $a['unsynced_orders'];
+                }
+                return strcasecmp($a['name'], $b['name']);
+            });
+
+            $fields = array('product_id', 'parent_id', 'name', 'sku', 'product_type', 'status', 'kounta_id', 'reason', 'possible_match', 'missing_since', 'unsynced_orders', 'latest_unsynced_order');
+            WP_CLI\Utils\format_items($format, $problems, $fields);
+
+            if (!$quiet) {
+                $by_reason = array_count_values(wp_list_pluck($problems, 'reason'));
+                WP_CLI::log('');
+                WP_CLI::log(sprintf('Kounta products: %d', count($kounta_products)));
+                WP_CLI::log(sprintf('Products with no Kounta ID: %d', isset($by_reason[Kounta_Missing_Products_Report::REASON_NO_MAPPING]) ? $by_reason[Kounta_Missing_Products_Report::REASON_NO_MAPPING] : 0));
+                WP_CLI::log(sprintf('Products whose Kounta ID is deleted or no longer exists: %d', isset($by_reason[Kounta_Missing_Products_Report::REASON_NOT_IN_KOUNTA]) ? $by_reason[Kounta_Missing_Products_Report::REASON_NOT_IN_KOUNTA] : 0));
+                WP_CLI::log(sprintf('Paid orders since %s containing these products and not synced to Kounta: %d', $since, count($unsynced_orders)));
+                if (!empty($unsynced_orders)) {
+                    WP_CLI::log('Order IDs: ' . implode(', ', array_slice($unsynced_orders, 0, 50)) . (count($unsynced_orders) > 50 ? ' ...' : ''));
+                }
+            }
+
+            if (!empty($assoc_args['draft'])) {
+                $local_plan = $report->plan_local_item_flags($kounta_products);
+                if (is_wp_error($local_plan)) {
+                    WP_CLI::error($local_plan->get_error_message());
+                }
+                $this->draft_missing($problems, $local_plan, $assoc_args);
+            }
+        }
+
+        /**
+         * Draft the products from the report whose Kounta product is gone
+         *
+         * @param array $problems   Report rows
+         * @param array $local_plan Local table changes from plan_local_item_flags()
+         * @param array $assoc_args Command options
+         */
+        private function draft_missing($problems, $local_plan, $assoc_args) {
+            // Only published products are changed; drafts, private products
+            // and disabled variations are already off the shop
+            $to_draft = array_filter($problems, function ($row) {
+                return $row['reason'] === Kounta_Missing_Products_Report::REASON_NOT_IN_KOUNTA
+                    && $row['missing_since'] === ''
+                    && $row['status'] === 'publish';
+            });
+
+            if (empty($to_draft) && empty($local_plan['remove']) && empty($local_plan['restore'])) {
+                WP_CLI::success('Nothing to change.');
+                return;
+            }
+
+            WP_CLI::confirm(sprintf(
+                'Set %d products out of stock and to draft (variations to private), flag %d Kounta products as removed and %d as active in the local product table?',
+                count($to_draft), count($local_plan['remove']), count($local_plan['restore'])
+            ), $assoc_args);
+
+            foreach ($local_plan['remove'] as $kounta_item_id) {
+                Kounta_Sync_Service::set_local_item_deleted($kounta_item_id, true);
+            }
+            foreach ($local_plan['restore'] as $kounta_item_id) {
+                Kounta_Sync_Service::set_local_item_deleted($kounta_item_id, false);
+            }
+            WP_CLI::log(sprintf('Local product table: %d flagged as removed from Kounta, %d flagged as active.', count($local_plan['remove']), count($local_plan['restore'])));
+
+            $drafted = 0;
+            foreach ($to_draft as $row) {
+                $new_status = Kounta_Sync_Service::mark_product_missing($row['product_id'], $row['kounta_id']);
+                if ($new_status === false) {
+                    WP_CLI::warning(sprintf('Could not load product %d (%s)', $row['product_id'], $row['name']));
+                    continue;
+                }
+                $drafted++;
+                WP_CLI::log(sprintf('%d %s -> %s', $row['product_id'], $row['name'], $new_status));
+            }
+
+            WP_CLI::success(sprintf('%d products set out of stock and to draft/private.', $drafted));
+        }
+    }
+
+    WP_CLI::add_command('kounta', 'BrewHQ_Kounta_CLI');
+}

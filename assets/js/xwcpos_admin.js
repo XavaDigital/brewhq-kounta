@@ -2,7 +2,7 @@
 jQuery(document).ready(function ($) {
   // Auto-submit form when filter dropdowns change
   $(
-    "#filter-category, #filter-import-status, #filter-sync-status, #filter-stock-status"
+    "#filter-category, #filter-import-status, #filter-sync-status, #filter-stock-status, #filter-kounta-status"
   ).on("change", function () {
     $("#xwcpos-list-table-form").submit();
   });

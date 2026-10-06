@@ -92,7 +92,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int_Admin')) {
         {
 
             wp_enqueue_style('xwcpos-admin', plugins_url('../assets/css/xwcpos_admin_style.css', __FILE__), false, '2.4.0');
-            wp_enqueue_script('xwcpos-adminsc', plugins_url('../assets/js/xwcpos_admin.js', __FILE__), array('jquery'), '2.4.1', true);
+            wp_enqueue_script('xwcpos-adminsc', plugins_url('../assets/js/xwcpos_admin.js', __FILE__), array('jquery'), '2.4.2', true);
             $xwcpos_data = array(
                 'admin_url' => admin_url('admin-ajax.php'),
             );

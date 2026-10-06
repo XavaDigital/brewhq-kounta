@@ -436,8 +436,11 @@ class Kounta_Sync_Service {
             return false;
         }
 
-        // Product exists in Kounta — clear any missing-product flags from earlier runs
-        $this->clear_missing_product_flags($item);
+        // Kounta keeps answering for deleted products (HTTP 200 with
+        // deleted=true) and rejects orders for them, so treat them as missing
+        if (!empty($k_product->deleted)) {
+            return $this->handle_missing_product($item, 'deleted in Kounta');
+        }
 
         // Find the site data for this specific site
         $site_data = null;
@@ -450,9 +453,15 @@ class Kounta_Sync_Service {
             }
         }
 
+        // Kounta rejects orders for products that are not available at the
+        // site ("Product #... is not available at that site")
         if (!$site_data) {
-            $this->log('WARNING: Product ' . $item->item_id . ' has no data for site ' . $site_id);
+            return $this->handle_missing_product($item, 'not available at site ' . $site_id);
         }
+
+        // Product exists in Kounta and is sold at this site — clear any
+        // missing-product flags from earlier runs
+        $this->clear_missing_product_flags($item);
 
         // Update stock
         if ($site_data) {
@@ -624,7 +633,8 @@ class Kounta_Sync_Service {
     }
 
     /**
-     * Handle a product that Kounta reports as not found (HTTP 404).
+     * Handle a product that cannot be ordered through Kounta: not found
+     * (HTTP 404), flagged deleted, or not available at the configured site.
      *
      * Counts consecutive misses on the WooCommerce product. Once the miss
      * count reaches the threshold (default 3, filter
@@ -633,12 +643,13 @@ class Kounta_Sync_Service {
      * variations), and the item is moved to the back of the sync queue so it
      * is no longer retried every run.
      *
-     * @param object $item Product item from database
+     * @param object $item   Product item from database
+     * @param string $reason Why the product is unavailable, for the log
      * @return bool Success status
      */
-    private function handle_missing_product($item) {
+    private function handle_missing_product($item, $reason = 'not found in Kounta (404)') {
         if (empty($item->wc_prod_id)) {
-            $this->log('WARNING: Product ' . $item->item_id . ' not found in Kounta (404) and has no WooCommerce product; skipping');
+            $this->log('WARNING: Product ' . $item->item_id . ' ' . $reason . ' and has no WooCommerce product; skipping');
             return $this->touch_sync_timestamp($item);
         }
 
@@ -649,8 +660,8 @@ class Kounta_Sync_Service {
 
         if ($count < $threshold) {
             $this->log(sprintf(
-                'WARNING: Product %s (wc_prod_id=%d) not found in Kounta (404) — miss %d of %d, no action yet',
-                $item->item_id, $product_id, $count, $threshold
+                'WARNING: Product %s (wc_prod_id=%d) %s — miss %d of %d, no action yet',
+                $item->item_id, $product_id, $reason, $count, $threshold
             ));
             // Leave the sync timestamp alone so the product is re-checked next run
             return false;
@@ -661,10 +672,36 @@ class Kounta_Sync_Service {
             return $this->touch_sync_timestamp($item);
         }
 
-        $product = wc_get_product($product_id);
-        if (!$product) {
+        $new_status = self::mark_product_missing($product_id, $item->item_id);
+        if ($new_status === false) {
             $this->log('ERROR: Could not load WooCommerce product ' . $product_id . ' to mark it missing from Kounta');
             return $this->touch_sync_timestamp($item);
+        }
+
+        $this->log(sprintf(
+            'Product %s (wc_prod_id=%d) %s after %d consecutive checks — set out of stock and status "%s"',
+            $item->item_id, $product_id, $reason, $count, $new_status
+        ));
+
+        return $this->touch_sync_timestamp($item);
+    }
+
+    /**
+     * Set a WooCommerce product out of stock and to draft (private for
+     * variations) because its Kounta product can no longer be ordered.
+     *
+     * Records the Kounta ID and previous status so that
+     * clear_missing_product_flags() can restore the product automatically if
+     * the same Kounta ID becomes available again.
+     *
+     * @param int    $product_id     WooCommerce product or variation ID
+     * @param string $kounta_item_id Kounta product ID the product is linked to
+     * @return string|false New status, or false if the product could not be loaded
+     */
+    public static function mark_product_missing($product_id, $kounta_item_id) {
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            return false;
         }
 
         $new_status = $product->is_type('variation') ? 'private' : 'draft';
@@ -677,17 +714,35 @@ class Kounta_Sync_Service {
         $product->save();
 
         // Remember what we changed and under which Kounta ID, so the product
-        // can be restored automatically if that same ID comes back
+        // can be restored automatically if that same ID comes back. The miss
+        // count must be set for clear_missing_product_flags() to act.
+        $threshold = max(1, intval(apply_filters('xwcpos_missing_product_threshold', 3)));
+        if (intval(get_post_meta($product_id, '_xwcpos_missing_count', true)) < $threshold) {
+            update_post_meta($product_id, '_xwcpos_missing_count', $threshold);
+        }
         update_post_meta($product_id, '_xwcpos_missing_from_kounta', current_time('mysql'));
-        update_post_meta($product_id, '_xwcpos_missing_item_id', $item->item_id);
+        update_post_meta($product_id, '_xwcpos_missing_item_id', $kounta_item_id);
         update_post_meta($product_id, '_xwcpos_status_before_missing', $previous_status);
 
-        $this->log(sprintf(
-            'Product %s (wc_prod_id=%d) missing from Kounta after %d consecutive checks — set out of stock and status "%s"',
-            $item->item_id, $product_id, $count, $new_status
-        ));
+        self::set_local_item_deleted($kounta_item_id, true);
 
-        return $this->touch_sync_timestamp($item);
+        return $new_status;
+    }
+
+    /**
+     * Set the deleted flag on the local copy of a Kounta product, which hides
+     * it from the Import Products list
+     *
+     * @param string $kounta_item_id Kounta product ID
+     * @param bool   $deleted        Whether the product is gone from Kounta
+     */
+    public static function set_local_item_deleted($kounta_item_id, $deleted) {
+        global $wpdb;
+        $wpdb->update(
+            $wpdb->prefix . 'xwcpos_items',
+            array('deleted' => $deleted ? 1 : 0),
+            array('item_id' => $kounta_item_id)
+        );
     }
 
     /**
@@ -703,6 +758,10 @@ class Kounta_Sync_Service {
      * @param object $item Product item from database
      */
     private function clear_missing_product_flags($item) {
+        if (!empty($item->deleted)) {
+            self::set_local_item_deleted($item->item_id, false);
+        }
+
         if (empty($item->wc_prod_id)) {
             return;
         }

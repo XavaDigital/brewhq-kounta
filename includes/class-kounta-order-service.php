@@ -607,6 +607,14 @@ class Kounta_Order_Service {
         $product_id = $item->get_variation_id() ? $item->get_variation_id() : $item->get_product_id();
         $kounta_product_id = get_post_meta($product_id, '_xwcpos_item_id', true);
 
+        // Gift card variations ($10, $20, ...) have no Kounta ID of their own;
+        // they are sold as the parent's single Kounta gift card product
+        $gift_card_kounta_id = (string) get_option('xwcpos_gift_card_product_id', '');
+        if (!$kounta_product_id && $item->get_variation_id() && $gift_card_kounta_id !== ''
+            && (string) get_post_meta($item->get_product_id(), '_xwcpos_item_id', true) === $gift_card_kounta_id) {
+            $kounta_product_id = $gift_card_kounta_id;
+        }
+
         if (!$kounta_product_id) {
             error_log('[BrewHQ Kounta Order] Product ' . $product_id . ' (' . $item->get_name() . ') has no Kounta product ID mapping');
             return null;
@@ -618,6 +626,20 @@ class Kounta_Order_Service {
         if ($quantity <= 0) {
             error_log('[BrewHQ Kounta Order] Invalid quantity for product ' . $product_id . ': ' . $quantity);
             return null;
+        }
+
+        // The Kounta gift card is a $1 (GST inclusive) unit: send the card's
+        // face value as the quantity, with the ex-GST unit price Kounta
+        // expects, so the line still equals what the customer paid
+        if ($gift_card_kounta_id !== '' && (string) $kounta_product_id === $gift_card_kounta_id) {
+            $card_value = round(floatval($item->get_subtotal()) + floatval($item->get_subtotal_tax()), 2);
+            if ($card_value > 0) {
+                return array(
+                    'product_id' => intval($kounta_product_id),
+                    'quantity' => $card_value,
+                    'unit_price' => $total / $card_value,
+                );
+            }
         }
 
         $unit_price = $total / $quantity;
