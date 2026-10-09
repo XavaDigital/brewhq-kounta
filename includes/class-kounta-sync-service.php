@@ -413,6 +413,17 @@ class Kounta_Sync_Service {
             return false;
         }
 
+        // The WooCommerce product has been permanently deleted (e.g. the trash
+        // was emptied): release the row instead of syncing a product that is gone
+        if (!empty($item->wc_prod_id) && !get_post($item->wc_prod_id)) {
+            $released = self::release_wc_product($item->wc_prod_id);
+            $this->log(sprintf(
+                'WooCommerce product %d no longer exists — %d Kounta product(s) removed from the plugin product table (gone from Kounta), %d unlinked',
+                $item->wc_prod_id, $released['removed'], $released['unlinked']
+            ));
+            return true;
+        }
+
         // Get Kounta product data
         $endpoint = 'companies/' . $this->api_client->get_account_id() . '/products/' . $item->item_id;
         $this->log(sprintf('Syncing product: item_id=%s, wc_prod_id=%s', $item->item_id, $item->wc_prod_id ?? 'none'));
@@ -437,9 +448,10 @@ class Kounta_Sync_Service {
         }
 
         // Kounta keeps answering for deleted products (HTTP 200 with
-        // deleted=true) and rejects orders for them, so treat them as missing
+        // deleted=true) and rejects orders for them. The flag is definite, so
+        // remove the product on the first check
         if (!empty($k_product->deleted)) {
-            return $this->handle_missing_product($item, 'deleted in Kounta');
+            return $this->handle_deleted_product($item);
         }
 
         // Find the site data for this specific site
@@ -678,12 +690,138 @@ class Kounta_Sync_Service {
             return $this->touch_sync_timestamp($item);
         }
 
-        $this->log(sprintf(
-            'Product %s (wc_prod_id=%d) %s after %d consecutive checks — set out of stock and status "%s"',
-            $item->item_id, $product_id, $reason, $count, $new_status
-        ));
+        if ($new_status === 'trash') {
+            $this->log(sprintf(
+                'Product %s (wc_prod_id=%d) %s — already in the trash, left there',
+                $item->item_id, $product_id, $reason
+            ));
+        } else {
+            $this->log(sprintf(
+                'Product %s (wc_prod_id=%d) %s after %d consecutive checks — set out of stock and status "%s"',
+                $item->item_id, $product_id, $reason, $count, $new_status
+            ));
+        }
 
         return $this->touch_sync_timestamp($item);
+    }
+
+    /**
+     * Handle a product Kounta reports as deleted (HTTP 200 with deleted=true).
+     *
+     * Unlike a 404 the flag is definite, so the WooCommerce products linked to
+     * it in the plugin product table are moved to the trash (WordPress empties
+     * it after 30 days) and the Kounta product is removed from the table.
+     * Products linked only by their own _xwcpos_item_id meta are not touched,
+     * as some carry another product's Kounta ID by mistake. A variable product
+     * with variations is left for manual review, since trashing it would take
+     * its variations with it.
+     *
+     * @param object $item Product item from database
+     * @return bool Success status
+     */
+    private function handle_deleted_product($item) {
+        global $wpdb;
+
+        $product_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT wc_prod_id FROM {$wpdb->prefix}xwcpos_items WHERE item_id = %s AND wc_prod_id IS NOT NULL",
+            $item->item_id
+        ));
+
+        $products = array();
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product($product_id);
+            if (!$product) {
+                continue;
+            }
+            if ($product->is_type('variable') && $product->get_children()) {
+                $this->log(sprintf(
+                    'WARNING: Product %s deleted in Kounta, but wc_prod_id=%d is a variable product with variations — left for manual review',
+                    $item->item_id, $product_id
+                ));
+                return $this->touch_sync_timestamp($item);
+            }
+            $products[] = $product;
+        }
+
+        foreach ($products as $product) {
+            if ($product->get_status() === 'trash') {
+                $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d already in the trash', $item->item_id, $product->get_id()));
+                continue;
+            }
+            if (!$product->delete(false)) {
+                $this->log(sprintf('ERROR: Product %s deleted in Kounta — could not move wc_prod_id=%d to the trash', $item->item_id, $product->get_id()));
+                return false;
+            }
+            $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d moved to the trash', $item->item_id, $product->get_id()));
+        }
+
+        self::remove_local_item($item->item_id);
+        $this->log(sprintf('Product %s deleted in Kounta — removed from the plugin product table', $item->item_id));
+
+        return true;
+    }
+
+    /**
+     * Release the plugin product table rows linked to a WooCommerce product
+     * that has been permanently deleted.
+     *
+     * A Kounta product flagged as gone from Kounta is removed from the table.
+     * One still in Kounta is unlinked, so it shows as not imported on the
+     * Import Products page and can be imported again.
+     *
+     * @param int $wc_prod_id Deleted WooCommerce product or variation ID
+     * @return array Counts of rows 'removed' and 'unlinked'
+     */
+    public static function release_wc_product($wc_prod_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'xwcpos_items';
+        $released = array('removed' => 0, 'unlinked' => 0);
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, item_id, deleted FROM {$table} WHERE wc_prod_id = %d",
+            $wc_prod_id
+        ));
+
+        foreach ($rows as $row) {
+            if ((string) $row->deleted === '1') {
+                $released['removed'] += self::remove_local_item($row->item_id);
+                continue;
+            }
+            $wpdb->update(
+                $table,
+                array(
+                    'wc_prod_id' => null,
+                    'xwcpos_import_date' => null,
+                    'xwcpos_last_sync_date' => null,
+                    'xwcpos_is_synced' => null,
+                ),
+                array('id' => $row->id)
+            );
+            $released['unlinked']++;
+        }
+
+        return $released;
+    }
+
+    /**
+     * Remove a Kounta product from the plugin product table, with its stock
+     * and price rows
+     *
+     * @param string $kounta_item_id Kounta product ID
+     * @return int Number of product rows removed
+     */
+    public static function remove_local_item($kounta_item_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'xwcpos_items';
+
+        $row_ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$table} WHERE item_id = %s", $kounta_item_id));
+        foreach ($row_ids as $row_id) {
+            $wpdb->delete($wpdb->prefix . 'xwcpos_item_shops', array('xwcpos_item_id' => $row_id));
+            $wpdb->delete($wpdb->prefix . 'xwcpos_item_prices', array('xwcpos_item_id' => $row_id));
+            $wpdb->delete($table, array('id' => $row_id));
+        }
+
+        return count($row_ids);
     }
 
     /**
@@ -694,9 +832,13 @@ class Kounta_Sync_Service {
      * clear_missing_product_flags() can restore the product automatically if
      * the same Kounta ID becomes available again.
      *
+     * A product already in the trash is left there untouched, so staff
+     * removals and WordPress's automatic trash emptying still apply.
+     *
      * @param int    $product_id     WooCommerce product or variation ID
      * @param string $kounta_item_id Kounta product ID the product is linked to
-     * @return string|false New status, or false if the product could not be loaded
+     * @return string|false New status ('trash' if left in the trash), or false
+     *                      if the product could not be loaded
      */
     public static function mark_product_missing($product_id, $kounta_item_id) {
         $product = wc_get_product($product_id);
@@ -704,14 +846,19 @@ class Kounta_Sync_Service {
             return false;
         }
 
-        $new_status = $product->is_type('variation') ? 'private' : 'draft';
         $previous_status = $product->get_status();
 
-        $product->set_manage_stock(true);
-        $product->set_stock_quantity(0);
-        $product->set_stock_status('outofstock');
-        $product->set_status($new_status);
-        $product->save();
+        if ($previous_status === 'trash') {
+            $new_status = 'trash';
+        } else {
+            $new_status = $product->is_type('variation') ? 'private' : 'draft';
+
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity(0);
+            $product->set_stock_status('outofstock');
+            $product->set_status($new_status);
+            $product->save();
+        }
 
         // Remember what we changed and under which Kounta ID, so the product
         // can be restored automatically if that same ID comes back. The miss

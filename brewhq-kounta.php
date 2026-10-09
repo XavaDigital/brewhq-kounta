@@ -119,6 +119,10 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             //Schedule product sync function with WP CRON
             add_action('xwcposSyncAll_hook', array($this, 'xwcposSyncAllProdsCRON'));
 
+            // Unlink or remove the Kounta product when its WooCommerce product
+            // is permanently deleted (deleted for good, or the trash emptied)
+            add_action('deleted_post', array($this, 'xwcpos_product_deleted'), 10, 2);
+
             register_activation_hook( __FILE__, array($this, 'schedule_CRON') );
 
             //add_action('http_api_curl', array($this, 'xwcpos_curl_img_upload'), 10, 3);
@@ -841,6 +845,28 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 $this->plugin_log('CRON ERROR: ' . $e->getMessage());
                 // Release lock on error
                 delete_transient('xwcpos_sync_in_progress');
+            }
+        }
+
+        /**
+         * Release the plugin product table rows of a WooCommerce product that
+         * has been permanently deleted: removed if the Kounta product is gone
+         * from Kounta, otherwise unlinked so it can be imported again
+         *
+         * @param int     $post_id Deleted post ID
+         * @param WP_Post $post    Deleted post
+         */
+        public function xwcpos_product_deleted($post_id, $post = null) {
+            if (!$post || !in_array($post->post_type, array('product', 'product_variation'), true)) {
+                return;
+            }
+
+            $released = Kounta_Sync_Service::release_wc_product($post_id);
+            if ($released['removed'] || $released['unlinked']) {
+                $this->plugin_log(sprintf(
+                    'WooCommerce product %d deleted — %d Kounta product(s) removed from the plugin product table (gone from Kounta), %d unlinked',
+                    $post_id, $released['removed'], $released['unlinked']
+                ));
             }
         }
 
