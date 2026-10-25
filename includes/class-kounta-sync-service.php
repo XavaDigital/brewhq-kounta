@@ -719,10 +719,12 @@ class Kounta_Sync_Service {
      * Kounta ID by mistake. A variable product with variations is left for
      * manual review, since trashing it would take its variations with it.
      *
-     * @param object $item Product item from database
+     * @param object $item  Product item from database
+     * @param bool   $touch Record the sync date, which also puts the product in
+     *                      the sync; false for products not in the sync
      * @return bool Success status
      */
-    private function handle_deleted_product($item) {
+    private function handle_deleted_product($item, $touch = true) {
         global $wpdb;
 
         $product_ids = $wpdb->get_col($wpdb->prepare(
@@ -741,7 +743,7 @@ class Kounta_Sync_Service {
                     'WARNING: Product %s deleted in Kounta, but wc_prod_id=%d is a variable product with variations — left for manual review',
                     $item->item_id, $product_id
                 ));
-                return $this->touch_sync_timestamp($item);
+                return $touch ? $this->touch_sync_timestamp($item) : true;
             }
             $products[] = $product;
         }
@@ -772,7 +774,65 @@ class Kounta_Sync_Service {
             $this->log(sprintf('Product %s deleted in Kounta — flagged as removed from Kounta in the plugin product table', $item->item_id));
         }
 
-        return $this->touch_sync_timestamp($item);
+        return $touch ? $this->touch_sync_timestamp($item) : true;
+    }
+
+    /**
+     * Check imported products that are not in the sync for deletion in Kounta
+     *
+     * Products imported with "Import" rather than "Import & Sync" have no sync
+     * date, so sync_products_optimized() leaves them alone. Their stock, price
+     * and details still are, but one Kounta reports as deleted is handled the
+     * same way as in the sync (handle_deleted_product()), without putting it
+     * in the sync.
+     *
+     * @return int Number of products found deleted in Kounta
+     */
+    public function check_unsynced_products_deleted() {
+        $found = 0;
+        foreach ($this->get_unsynced_imported_items() as $item) {
+            if ($this->check_unsynced_item_deleted($item)) {
+                $found++;
+            }
+        }
+        return $found;
+    }
+
+    /**
+     * Imported products with no sync date, one row per Kounta product,
+     * leaving out ones already flagged whose WooCommerce product is in the
+     * trash
+     *
+     * @return array Product items from database
+     */
+    private function get_unsynced_imported_items() {
+        global $wpdb;
+
+        return $wpdb->get_results(
+            "SELECT i.* FROM {$wpdb->prefix}xwcpos_items i
+             INNER JOIN {$wpdb->posts} p ON p.ID = i.wc_prod_id
+             WHERE (i.xwcpos_last_sync_date IS NULL OR NOT (i.xwcpos_last_sync_date > 0))
+             AND NOT (COALESCE(i.deleted, '0') = '1' AND p.post_status = 'trash')
+             GROUP BY i.item_id"
+        );
+    }
+
+    /**
+     * Handle one imported product that is not in the sync, if Kounta reports
+     * it as deleted
+     *
+     * @param object $item Product item from database
+     * @return bool Whether Kounta reports the product as deleted
+     */
+    private function check_unsynced_item_deleted($item) {
+        $k_product = $this->api_client->make_request('companies/' . $this->api_client->get_account_id() . '/products/' . $item->item_id);
+        if (is_wp_error($k_product) || !is_object($k_product) || empty($k_product->deleted)) {
+            return false;
+        }
+
+        $this->log(sprintf('Product %s (wc_prod_id=%d) is not in the sync but is deleted in Kounta', $item->item_id, $item->wc_prod_id));
+        $this->handle_deleted_product($item, false);
+        return true;
     }
 
     /**

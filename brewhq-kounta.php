@@ -851,10 +851,14 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 // Products are synced oldest-first, so all products will eventually be synced
                 $product_result = $sync_service->sync_products_optimized(200);
 
+                // Products imported without sync are only checked for deletion in Kounta
+                $unsynced_deleted = $sync_service->check_unsynced_products_deleted();
+
                 $this->plugin_log(sprintf(
-                    'CRON: Optimized sync completed - %d products updated in %.2f seconds',
+                    'CRON: Optimized sync completed - %d products updated in %.2f seconds, %d product(s) not in the sync found deleted in Kounta',
                     $product_result['updated'],
-                    $product_result['duration']
+                    $product_result['duration'],
+                    $unsynced_deleted
                 ));
 
                 // Release lock after successful completion
