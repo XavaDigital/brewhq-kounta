@@ -758,15 +758,17 @@ class Kounta_Sync_Service {
                 }
                 continue;
             }
+            // Read before delete(), which resets the product's ID to 0
+            $product_id = $product->get_id();
             // Marks the products the sync trashed, so only those are restored
             // if the Kounta product comes back
-            update_post_meta($product->get_id(), '_xwcpos_trashed_by_sync', current_time('mysql'));
+            update_post_meta($product_id, '_xwcpos_trashed_by_sync', current_time('mysql'));
             if (!$product->delete(false)) {
-                delete_post_meta($product->get_id(), '_xwcpos_trashed_by_sync');
-                $this->log(sprintf('ERROR: Product %s deleted in Kounta — could not move wc_prod_id=%d to the trash', $item->item_id, $product->get_id()));
+                delete_post_meta($product_id, '_xwcpos_trashed_by_sync');
+                $this->log(sprintf('ERROR: Product %s deleted in Kounta — could not move wc_prod_id=%d to the trash', $item->item_id, $product_id));
                 return false;
             }
-            $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d moved to the trash', $item->item_id, $product->get_id()));
+            $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d moved to the trash', $item->item_id, $product_id));
         }
 
         if (!$already_flagged) {
