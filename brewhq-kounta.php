@@ -123,8 +123,9 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             // is permanently deleted (deleted for good, or the trash emptied)
             add_action('deleted_post', array($this, 'xwcpos_product_deleted'), 10, 2);
 
-            // Empty the plugin trash table daily, alongside WordPress's own trash
-            add_action('wp_scheduled_delete', array($this, 'xwcpos_purge_trashed_items'));
+            // Delete products removed from Kounta that were never imported,
+            // daily alongside WordPress's own trash emptying
+            add_action('wp_scheduled_delete', array($this, 'xwcpos_purge_removed_items'));
 
             register_activation_hook( __FILE__, array($this, 'schedule_CRON') );
 
@@ -367,6 +368,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
 							measure                 varchar(255) NULL,
 							is_sold                 varchar(255) NULL,
 							deleted                 varchar(255) NULL,
+							deleted_at_gmt          datetime NULL,
 							xwcpos_import_date      datetime,
 							xwcpos_last_sync_date   datetime,
 							xwcpos_is_synced		    int(25),
@@ -737,9 +739,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 exit();
             }
 
-            // Before adding new products, so a product back in Kounta gets its
-            // trashed row (and WooCommerce link) back instead of a new row
-            $restored = $this->xwcpos_restore_items_back_in_kounta($items);
+            $unflagged = $this->xwcpos_unflag_items_back_in_kounta($items);
 
             $inventory = $this->get_kounta_inventory();
 
@@ -769,21 +769,21 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 }
             }
 
-            // Trash products gone from Kounta that were never imported;
+            // Flag products gone from Kounta that were never imported;
             // imported ones are left for the product sync, which trashes or
             // drafts the WooCommerce product. Runs after the import because it
             // waits out the API limit rather than stopping at it
-            $removed = $this->xwcpos_remove_items_gone_from_kounta($items);
-            if (is_wp_error($removed)) {
-                $this->plugin_log('Not removing products gone from Kounta: ' . $removed->get_error_message());
-                $removed = 0;
+            $flagged = $this->xwcpos_flag_items_gone_from_kounta($items);
+            if (is_wp_error($flagged)) {
+                $this->plugin_log('Not flagging products gone from Kounta: ' . $flagged->get_error_message());
+                $flagged = 0;
             }
 
             update_option('xwcpos_load_timestamp', date(DATE_ATOM));
 
             $this->plugin_log(sprintf(
-                'Product import finished: %d products from Kounta, %d new added, %d already loaded, %d restored from trash, %d moved to trash (gone from Kounta), %d failed%s',
-                $count, $added, $existing, $restored, $removed, $failed, $rate_limited ? ', stopped early by API limit' : ''
+                'Product import finished: %d products from Kounta, %d new added, %d already loaded, %d back in Kounta, %d flagged as removed from Kounta, %d failed%s',
+                $count, $added, $existing, $unflagged, $flagged, $failed, $rate_limited ? ', stopped early by API limit' : ''
             ));
 
             if ($rate_limited) {
@@ -805,8 +805,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                         esc_html__("%d new products added (%d already loaded%s).", "xwcpos"),
                         $added,
                         $existing,
-                        ($restored ? sprintf(esc_html__(", %d restored from trash", "xwcpos"), $restored) : '')
-                            . ($removed ? sprintf(esc_html__(", %d moved to trash as no longer in Kounta", "xwcpos"), $removed) : '')
+                        ($unflagged ? sprintf(esc_html__(", %d back in Kounta", "xwcpos"), $unflagged) : '')
+                            . ($flagged ? sprintf(esc_html__(", %d marked as removed from Kounta", "xwcpos"), $flagged) : '')
                             . ($failed ? sprintf(esc_html__(", %d failed - see debug log", "xwcpos"), $failed) : '')
                     ),
                 )
@@ -887,22 +887,17 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     $post_id, $released['removed'], $released['unlinked']
                 ));
             }
-
-            $purged = Kounta_Sync_Service::purge_trashed_for_wc_product($post_id);
-            if ($purged) {
-                $this->plugin_log(sprintf('WooCommerce product %d deleted — %d Kounta product(s) deleted from the plugin trash table', $post_id, $purged));
-            }
         }
 
         /**
-         * Permanently delete Kounta products that have been in the plugin trash
-         * table longer than WordPress keeps posts in its trash (EMPTY_TRASH_DAYS,
-         * 30 by default)
+         * Delete Kounta products never imported into WooCommerce that have been
+         * flagged as removed from Kounta for longer than WordPress keeps posts
+         * in its trash (EMPTY_TRASH_DAYS, 30 by default)
          */
-        public function xwcpos_purge_trashed_items() {
-            $purged = Kounta_Sync_Service::purge_trashed_items(EMPTY_TRASH_DAYS);
+        public function xwcpos_purge_removed_items() {
+            $purged = Kounta_Sync_Service::purge_removed_items(EMPTY_TRASH_DAYS);
             if ($purged) {
-                $this->plugin_log(sprintf('%d Kounta product(s) in the plugin trash table for over %d days deleted', $purged, EMPTY_TRASH_DAYS));
+                $this->plugin_log(sprintf('%d Kounta product(s) removed from Kounta for over %d days deleted from the plugin product table', $purged, EMPTY_TRASH_DAYS));
             }
         }
 
@@ -1091,19 +1086,27 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         /**
-         * Move products from the plugin trash table back to the products table
-         * when they are in Kounta's product list again
+         * Clear the removed-from-Kounta flag on products never imported into
+         * WooCommerce that are in Kounta's product list again
+         *
+         * Imported products are unflagged by the product sync, which also takes
+         * their WooCommerce product out of the trash.
          *
          * @param array $items Complete Kounta product list from xwcpos_fetch_simple_items()
-         * @return int Number of Kounta products restored
+         * @return int Number of Kounta products unflagged
          */
-        public function xwcpos_restore_items_back_in_kounta($items)
+        public function xwcpos_unflag_items_back_in_kounta($items)
         {
             global $wpdb;
-            $trash = Kounta_Sync_Service::trash_table();
+            Kounta_Sync_Service::ensure_deleted_at_column();
+            $table = $wpdb->prefix . 'xwcpos_items';
 
-            $trashed_ids = $wpdb->get_col("SELECT DISTINCT item_id FROM {$trash} WHERE item_id IS NOT NULL AND item_id <> ''");
-            if (empty($trashed_ids)) {
+            $flagged_ids = $wpdb->get_col(
+                "SELECT DISTINCT item_id FROM {$table}
+                 WHERE deleted = '1' AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))
+                 AND item_id IS NOT NULL AND item_id <> ''"
+            );
+            if (empty($flagged_ids)) {
                 return 0;
             }
 
@@ -1114,43 +1117,40 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 }
             }
 
-            $restored = 0;
-            foreach ($trashed_ids as $kounta_item_id) {
+            $unflagged = 0;
+            foreach ($flagged_ids as $kounta_item_id) {
                 if (!isset($kounta_ids[(string) $kounta_item_id])) {
                     continue;
                 }
-                $result = Kounta_Sync_Service::restore_local_item($kounta_item_id);
-                if ($result['rows']) {
-                    $restored++;
-                    $this->plugin_log(sprintf(
-                        'Item id %s is back in Kounta - %d row(s) restored from the plugin trash table, %d WooCommerce product(s) taken out of the trash',
-                        $kounta_item_id, $result['rows'], $result['products']
-                    ));
+                if (Kounta_Sync_Service::set_local_item_deleted($kounta_item_id, false, true)) {
+                    $unflagged++;
+                    $this->plugin_log('Item id ' . $kounta_item_id . ' is back in Kounta - removed-from-Kounta flag cleared');
                 }
             }
 
-            return $restored;
+            return $unflagged;
         }
 
         /**
-         * Move products that are gone from Kounta from the products table to
-         * the plugin trash table, if they were never imported into WooCommerce
+         * Flag products that are gone from Kounta as removed from Kounta, if
+         * they were never imported into WooCommerce
          *
          * Kounta's product list leaves out deleted products, so each product
          * missing from it is fetched on its own. One Kounta answers with
-         * deleted=true is trashed straight away. One missing for any other
-         * reason (not found, an API error) is trashed once it has been missing
+         * deleted=true is flagged straight away. One missing for any other
+         * reason (not found, an API error) is flagged once it has been missing
          * on this many loads in a row (default 3, filter
-         * 'xwcpos_missing_product_threshold'). Trashed rows are restored if the
-         * product is back in the list (xwcpos_restore_items_back_in_kounta())
-         * and deleted after EMPTY_TRASH_DAYS. Rows linked to a WooCommerce
-         * product are left alone: the product sync checks those and trashes or
-         * drafts the WooCommerce product.
+         * 'xwcpos_missing_product_threshold'). Flagged products show under
+         * "Removed from Kounta" on the Import Products page, are unflagged if
+         * they are back in the list (xwcpos_unflag_items_back_in_kounta()), and
+         * are deleted after EMPTY_TRASH_DAYS (xwcpos_purge_removed_items()).
+         * Rows linked to a WooCommerce product are left alone: the product sync
+         * checks those and trashes or drafts the WooCommerce product.
          *
          * @param array $items Complete Kounta product list from xwcpos_fetch_simple_items()
-         * @return int|WP_Error Number of rows trashed
+         * @return int|WP_Error Number of rows flagged
          */
-        public function xwcpos_remove_items_gone_from_kounta($items)
+        public function xwcpos_flag_items_gone_from_kounta($items)
         {
             global $wpdb;
             $table = $wpdb->prefix . 'xwcpos_items';
@@ -1174,10 +1174,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 ));
             }
 
-            // Not imported, matching the Import Products page (wc_prod_id empty or 0)
+            // Not imported, matching the Import Products page (wc_prod_id empty
+            // or 0), and not already flagged
             $rows = $wpdb->get_results(
                 "SELECT id, item_id, name FROM {$table}
                  WHERE (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))
+                 AND COALESCE(deleted, '0') <> '1'
                  AND item_id IS NOT NULL AND item_id <> ''"
             );
 
@@ -1204,7 +1206,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $misses = array();
 
             $api_client = new Kounta_API_Client();
-            $removed = 0;
+            $flagged = 0;
 
             foreach ($missing as $kounta_item_id => $item_rows) {
                 $kounta_item_id = (string) $kounta_item_id;
@@ -1226,19 +1228,17 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                     $reason = sprintf('missing from Kounta product list %d times in a row', $count);
                 }
 
-                foreach ($item_rows as $row) {
-                    // Checks again that the row is not imported, in case it was imported since the query above
-                    if (!Kounta_Sync_Service::trash_local_rows(array($row->id), $reason, true)) {
-                        continue;
-                    }
-                    $this->plugin_log('Item id ' . $row->item_id . ' (' . $row->name . ') ' . $reason . ' - moved to the plugin trash table');
-                    $removed++;
+                // Only unimported rows, in case one was imported since the query above
+                $rows_flagged = Kounta_Sync_Service::set_local_item_deleted($kounta_item_id, true, true);
+                if ($rows_flagged) {
+                    $this->plugin_log('Item id ' . $kounta_item_id . ' (' . $item_rows[0]->name . ') ' . $reason . ' - flagged as removed from Kounta');
+                    $flagged += $rows_flagged;
                 }
             }
 
             update_option('xwcpos_missing_item_counts', $misses, false);
 
-            return $removed;
+            return $flagged;
         }
 
         public function xwcpos_fetch_variable_items()

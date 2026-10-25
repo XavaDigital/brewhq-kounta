@@ -709,14 +709,15 @@ class Kounta_Sync_Service {
      * Handle a product Kounta reports as deleted (HTTP 200 with deleted=true).
      *
      * Unlike a 404 the flag is definite, so the WooCommerce products linked to
-     * it in the plugin product table are moved to the trash (WordPress empties
-     * it after 30 days) and the Kounta product is moved to the plugin trash
-     * table, which is emptied on the same schedule. Both are restored if the
-     * product is back in Kounta's product list before then (see
-     * restore_local_item()). Products linked only by their own _xwcpos_item_id
-     * meta are not touched, as some carry another product's Kounta ID by
-     * mistake. A variable product with variations is left for manual review,
-     * since trashing it would take its variations with it.
+     * it in the plugin product table are moved to the trash and the Kounta
+     * product is flagged as removed from Kounta. When WordPress empties the
+     * trash (after EMPTY_TRASH_DAYS) the flagged rows are removed by
+     * release_wc_product(). If the product is back in Kounta before then, the
+     * sync clears the flag and takes the products out of the trash
+     * (clear_missing_product_flags()). Products linked only by their own
+     * _xwcpos_item_id meta are not touched, as some carry another product's
+     * Kounta ID by mistake. A variable product with variations is left for
+     * manual review, since trashing it would take its variations with it.
      *
      * @param object $item Product item from database
      * @return bool Success status
@@ -745,9 +746,14 @@ class Kounta_Sync_Service {
             $products[] = $product;
         }
 
+        // Already handled on an earlier run; only new changes are logged
+        $already_flagged = ((string) $item->deleted === '1');
+
         foreach ($products as $product) {
             if ($product->get_status() === 'trash') {
-                $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d already in the trash', $item->item_id, $product->get_id()));
+                if (!$already_flagged) {
+                    $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d already in the trash', $item->item_id, $product->get_id()));
+                }
                 continue;
             }
             // Marks the products the sync trashed, so only those are restored
@@ -761,202 +767,94 @@ class Kounta_Sync_Service {
             $this->log(sprintf('Product %s deleted in Kounta — wc_prod_id=%d moved to the trash', $item->item_id, $product->get_id()));
         }
 
-        self::trash_local_item($item->item_id, 'deleted in Kounta');
-        $this->log(sprintf('Product %s deleted in Kounta — moved to the plugin trash table', $item->item_id));
+        if (!$already_flagged) {
+            self::set_local_item_deleted($item->item_id, true);
+            $this->log(sprintf('Product %s deleted in Kounta — flagged as removed from Kounta in the plugin product table', $item->item_id));
+        }
 
-        return true;
+        return $this->touch_sync_timestamp($item);
     }
 
     /**
-     * Name of the plugin trash table, creating it on first use
+     * Add the deleted_at_gmt column to the plugin product table if it is not
+     * there yet
      *
-     * It has the product table's columns plus trashed_at_gmt and
-     * trashed_reason. Rows keep their ID and WooCommerce link so they can be
-     * moved back, and their stock and price rows stay where they are until
-     * the row is purged.
-     *
-     * @return string Table name
+     * It records when a product was flagged as removed from Kounta, so ones
+     * never imported can be deleted after EMPTY_TRASH_DAYS. Products flagged
+     * before the column existed are dated now.
      */
-    public static function trash_table() {
+    public static function ensure_deleted_at_column() {
         global $wpdb;
         static $ready = array();
 
-        $table = $wpdb->prefix . 'xwcpos_items_trash';
+        $table = $wpdb->prefix . 'xwcpos_items';
         if (isset($ready[$table])) {
-            return $table;
+            return;
         }
 
-        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) !== $table) {
-            $wpdb->query("CREATE TABLE {$table} LIKE {$wpdb->prefix}xwcpos_items");
-            $wpdb->query("ALTER TABLE {$table} ADD trashed_at_gmt datetime NULL, ADD trashed_reason varchar(255) NULL");
-            $wpdb->query("ALTER TABLE {$table} ADD KEY trash_item_id (item_id), ADD KEY trash_trashed_at (trashed_at_gmt)");
+        if (!$wpdb->get_var("SHOW COLUMNS FROM {$table} LIKE 'deleted_at_gmt'")) {
+            $wpdb->query("ALTER TABLE {$table} ADD deleted_at_gmt datetime NULL AFTER deleted");
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$table} SET deleted_at_gmt = %s WHERE deleted = '1'",
+                current_time('mysql', true)
+            ));
         }
 
         $ready[$table] = true;
-        return $table;
     }
 
     /**
-     * Column list of the plugin product table, for copying rows to and from
-     * the trash table
-     *
-     * @return string Backtick-quoted, comma-separated column names
-     */
-    private static function item_columns() {
-        global $wpdb;
-        $columns = $wpdb->get_col("SHOW COLUMNS FROM {$wpdb->prefix}xwcpos_items");
-        return '`' . implode('`, `', $columns) . '`';
-    }
-
-    /**
-     * Move rows of the plugin product table to the trash table
-     *
-     * @param array  $row_ids         Product table row IDs
-     * @param string $reason          Why the rows are trashed
-     * @param bool   $only_unimported Only move rows not linked to a WooCommerce product
-     * @return int Number of rows moved
-     */
-    public static function trash_local_rows($row_ids, $reason, $only_unimported = false) {
-        global $wpdb;
-        $table = $wpdb->prefix . 'xwcpos_items';
-        $trash = self::trash_table();
-        $columns = self::item_columns();
-        $condition = $only_unimported ? " AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))" : '';
-
-        $moved = 0;
-        foreach ($row_ids as $row_id) {
-            $copied = $wpdb->query($wpdb->prepare(
-                "REPLACE INTO {$trash} ({$columns}, trashed_at_gmt, trashed_reason)
-                 SELECT {$columns}, %s, %s FROM {$table} WHERE id = %d{$condition}",
-                current_time('mysql', true), $reason, $row_id
-            ));
-            if ($copied) {
-                $wpdb->delete($table, array('id' => $row_id));
-                $moved++;
-            }
-        }
-
-        return $moved;
-    }
-
-    /**
-     * Move all rows of a Kounta product to the trash table
-     *
-     * @param string $kounta_item_id Kounta product ID
-     * @param string $reason         Why the product is trashed
-     * @return int Number of rows moved
-     */
-    public static function trash_local_item($kounta_item_id, $reason) {
-        global $wpdb;
-        $row_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM {$wpdb->prefix}xwcpos_items WHERE item_id = %s",
-            $kounta_item_id
-        ));
-        return self::trash_local_rows($row_ids, $reason);
-    }
-
-    /**
-     * Move a Kounta product's rows back from the trash table, and take the
-     * WooCommerce products the sync trashed for it out of the trash with
-     * their previous status
+     * Take a WooCommerce product out of the trash with its previous status, if
+     * handle_deleted_product() trashed it
      *
      * Products staff trashed themselves are left in the trash.
      *
-     * @param string $kounta_item_id Kounta product ID
-     * @return array Counts of 'rows' moved back and WooCommerce 'products' restored
+     * @param int $product_id WooCommerce product or variation ID
+     * @return bool Whether the product was taken out of the trash
      */
-    public static function restore_local_item($kounta_item_id) {
-        global $wpdb;
-        $table = $wpdb->prefix . 'xwcpos_items';
-        $trash = self::trash_table();
-        $columns = self::item_columns();
-        $restored = array('rows' => 0, 'products' => 0);
-
-        $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, wc_prod_id FROM {$trash} WHERE item_id = %s",
-            $kounta_item_id
-        ));
-
-        foreach ($rows as $row) {
-            $copied = $wpdb->query($wpdb->prepare(
-                "INSERT INTO {$table} ({$columns}) SELECT {$columns} FROM {$trash} WHERE id = %d",
-                $row->id
-            ));
-            if (!$copied) {
-                continue;
-            }
-            $wpdb->delete($trash, array('id' => $row->id));
-            $restored['rows']++;
-
-            $product_id = intval($row->wc_prod_id);
-            if (!$product_id || !get_post_meta($product_id, '_xwcpos_trashed_by_sync', true)) {
-                continue;
-            }
-            if (get_post_status($product_id) === 'trash') {
-                add_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10, 3);
-                if (wp_untrash_post($product_id)) {
-                    $restored['products']++;
-                }
-                remove_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10);
-            }
-            delete_post_meta($product_id, '_xwcpos_trashed_by_sync');
+    public static function untrash_synced_product($product_id) {
+        if (!get_post_meta($product_id, '_xwcpos_trashed_by_sync', true)) {
+            return false;
         }
 
-        if ($restored['rows']) {
-            self::set_local_item_deleted($kounta_item_id, false);
+        $untrashed = false;
+        if (get_post_status($product_id) === 'trash') {
+            add_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10, 3);
+            $untrashed = (bool) wp_untrash_post($product_id);
+            remove_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10);
         }
+        delete_post_meta($product_id, '_xwcpos_trashed_by_sync');
 
-        return $restored;
+        return $untrashed;
     }
 
     /**
-     * Permanently delete trash table rows trashed more than $days days ago
+     * Delete products flagged as removed from Kounta more than $days days ago
+     * that were never imported, with their stock and price rows
      *
-     * @param int $days Days a row stays in the trash
+     * Imported ones are removed when WordPress empties the trash of their
+     * WooCommerce product (release_wc_product()).
+     *
+     * @param int $days Days a product stays flagged before it is deleted
      * @return int Number of rows deleted
      */
-    public static function purge_trashed_items($days) {
+    public static function purge_removed_items($days) {
         global $wpdb;
-        $trash = self::trash_table();
+        self::ensure_deleted_at_column();
+        $table = $wpdb->prefix . 'xwcpos_items';
         $cutoff = gmdate('Y-m-d H:i:s', time() - intval($days) * DAY_IN_SECONDS);
 
-        return self::delete_trash_rows($wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM {$trash} WHERE trashed_at_gmt < %s",
+        $row_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$table}
+             WHERE deleted = '1' AND deleted_at_gmt < %s
+             AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))",
             $cutoff
-        )));
-    }
-
-    /**
-     * Permanently delete the trash table rows linked to a WooCommerce product
-     * that has been permanently deleted
-     *
-     * @param int $wc_prod_id Deleted WooCommerce product or variation ID
-     * @return int Number of rows deleted
-     */
-    public static function purge_trashed_for_wc_product($wc_prod_id) {
-        global $wpdb;
-        $trash = self::trash_table();
-
-        return self::delete_trash_rows($wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM {$trash} WHERE wc_prod_id = %s",
-            (string) $wc_prod_id
-        )));
-    }
-
-    /**
-     * Delete trash table rows with their stock and price rows
-     *
-     * @param array $row_ids Trash table row IDs
-     * @return int Number of rows deleted
-     */
-    private static function delete_trash_rows($row_ids) {
-        global $wpdb;
-        $trash = self::trash_table();
+        ));
 
         foreach ($row_ids as $row_id) {
             $wpdb->delete($wpdb->prefix . 'xwcpos_item_shops', array('xwcpos_item_id' => $row_id));
             $wpdb->delete($wpdb->prefix . 'xwcpos_item_prices', array('xwcpos_item_id' => $row_id));
-            $wpdb->delete($trash, array('id' => $row_id));
+            $wpdb->delete($table, array('id' => $row_id));
         }
 
         return count($row_ids);
@@ -1079,18 +977,34 @@ class Kounta_Sync_Service {
 
     /**
      * Set the deleted flag on the local copy of a Kounta product, which hides
-     * it from the Import Products list
+     * it from the Import Products list (it shows under "Removed from Kounta"),
+     * and record when it was set
      *
-     * @param string $kounta_item_id Kounta product ID
-     * @param bool   $deleted        Whether the product is gone from Kounta
+     * @param string $kounta_item_id  Kounta product ID
+     * @param bool   $deleted         Whether the product is gone from Kounta
+     * @param bool   $only_unimported Only change rows not linked to a WooCommerce product
+     * @return int Number of rows changed
      */
-    public static function set_local_item_deleted($kounta_item_id, $deleted) {
+    public static function set_local_item_deleted($kounta_item_id, $deleted, $only_unimported = false) {
         global $wpdb;
-        $wpdb->update(
-            $wpdb->prefix . 'xwcpos_items',
-            array('deleted' => $deleted ? 1 : 0),
-            array('item_id' => $kounta_item_id)
-        );
+        self::ensure_deleted_at_column();
+        $table = $wpdb->prefix . 'xwcpos_items';
+        $condition = $only_unimported ? " AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))" : '';
+
+        if ($deleted) {
+            // Rows already flagged keep their date, so the removal period does not restart
+            return (int) $wpdb->query($wpdb->prepare(
+                "UPDATE {$table} SET deleted = '1', deleted_at_gmt = %s
+                 WHERE item_id = %s AND COALESCE(deleted, '0') <> '1'{$condition}",
+                current_time('mysql', true), $kounta_item_id
+            ));
+        }
+
+        return (int) $wpdb->query($wpdb->prepare(
+            "UPDATE {$table} SET deleted = '0', deleted_at_gmt = NULL
+             WHERE item_id = %s AND deleted = '1'{$condition}",
+            $kounta_item_id
+        ));
     }
 
     /**
@@ -1101,7 +1015,9 @@ class Kounta_Sync_Service {
      * previous status is restored automatically (the stock sync that follows
      * sets the real stock level). If the product was re-linked to a different
      * Kounta ID (e.g. recreated in Kounta and matched by SKU on import), it is
-     * left as draft and a log line asks for manual review.
+     * left as draft and a log line asks for manual review. If
+     * handle_deleted_product() trashed the product, it is taken out of the
+     * trash with its previous status.
      *
      * @param object $item Product item from database
      */
@@ -1115,6 +1031,13 @@ class Kounta_Sync_Service {
         }
 
         $product_id = intval($item->wc_prod_id);
+
+        if (self::untrash_synced_product($product_id)) {
+            $this->log(sprintf(
+                'Product %s (wc_prod_id=%d) is back in Kounta — taken out of the trash with its previous status',
+                $item->item_id, $product_id
+            ));
+        }
 
         if (get_post_meta($product_id, '_xwcpos_missing_count', true) === '') {
             return;

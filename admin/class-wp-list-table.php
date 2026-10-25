@@ -327,6 +327,7 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
           //var_dump('marker 3');
 
             global $wpdb;
+            Kounta_Sync_Service::ensure_deleted_at_column();
             $wpdb->xwcpos_items = $wpdb->prefix . 'xwcpos_items';
             $wpdb->xwcpos_item_shops = $wpdb->prefix . 'xwcpos_item_shops';
             $wpdb->xwcpos_item_prices = $wpdb->prefix . 'xwcpos_item_prices';
@@ -428,7 +429,9 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                   item.xwcpos_is_synced 	      AS product_is_synced,
                   item.wc_prod_id               AS wc_prod_id,
                   item.sku                      AS product_sku,
-                  item.image                    AS product_image
+                  item.image                    AS product_image,
+                  item.deleted                  AS product_deleted,
+                  item.deleted_at_gmt           AS product_deleted_at
               FROM $wpdb->xwcpos_items as item
               LEFT JOIN $wpdb->xwcpos_item_categories as category ON item.categories LIKE CONCAT('%', CONCAT(category.cat_id ,'%' ))
               LEFT JOIN $wpdb->xwcpos_item_shops as item_shop ON item.id = item_shop.xwcpos_item_id
@@ -782,8 +785,33 @@ if (!class_exists('BrewHQ_Kounta_Import_Table')) {
                 unset($actions['disable_sync']);
             }
 
-            return sprintf('%1$s %2$s', '<b>' . $this->xwcpos_namehtml($item) . '</b>', $this->row_actions($actions));
+            return sprintf('%1$s %2$s', '<b>' . $this->xwcpos_namehtml($item) . '</b>' . $this->xwcpos_removed_note($item), $this->row_actions($actions));
 
+        }
+
+        /**
+         * When a product was flagged as removed from Kounta, and for one never
+         * imported, when it will be deleted from the plugin
+         *
+         * @param object $item Row from xwcpos_get_items()
+         * @return string HTML, empty if the product is not flagged
+         */
+        public function xwcpos_removed_note($item)
+        {
+            if (!isset($item->product_deleted) || (string) $item->product_deleted !== '1') {
+                return '';
+            }
+
+            $note = esc_html__('Removed from Kounta', 'xwcpos');
+            if (!empty($item->product_deleted_at)) {
+                $note .= ' ' . sprintf(esc_html__('on %s', 'xwcpos'), get_date_from_gmt($item->product_deleted_at, 'd-m-Y'));
+                if (empty($item->wc_prod_id) || $item->wc_prod_id === '0') {
+                    $purge_at = gmdate('Y-m-d H:i:s', strtotime($item->product_deleted_at . ' UTC') + EMPTY_TRASH_DAYS * DAY_IN_SECONDS);
+                    $note .= ' &middot; ' . sprintf(esc_html__('deleted from the plugin after %s', 'xwcpos'), get_date_from_gmt($purge_at, 'd-m-Y'));
+                }
+            }
+
+            return '<br><span style="color: #b32d2e; font-size: 12px;">' . $note . '</span>';
         }
 
         public function xwcpos_namehtml($item)
