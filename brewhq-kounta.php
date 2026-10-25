@@ -734,15 +734,6 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 exit();
             }
 
-            // Products deleted in Kounta drop out of its product list. Remove
-            // the ones that were never imported; imported ones are left for the
-            // product sync, which trashes or drafts the WooCommerce product
-            $removed = $this->xwcpos_remove_items_gone_from_kounta($items);
-            if (is_wp_error($removed)) {
-                $this->plugin_log('Not removing products gone from Kounta: ' . $removed->get_error_message());
-                $removed = 0;
-            }
-
             $inventory = $this->get_kounta_inventory();
 
             $count = count($items);
@@ -771,10 +762,20 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 }
             }
 
+            // Remove products Kounta reports as deleted that were never
+            // imported; imported ones are left for the product sync, which
+            // trashes the WooCommerce product. Runs after the import because
+            // it waits out the API limit rather than stopping at it
+            $removed = $this->xwcpos_remove_items_deleted_in_kounta($items);
+            if (is_wp_error($removed)) {
+                $this->plugin_log('Not removing products deleted in Kounta: ' . $removed->get_error_message());
+                $removed = 0;
+            }
+
             update_option('xwcpos_load_timestamp', date(DATE_ATOM));
 
             $this->plugin_log(sprintf(
-                'Product import finished: %d products from Kounta, %d new added, %d already loaded, %d removed (no longer in Kounta), %d failed%s',
+                'Product import finished: %d products from Kounta, %d new added, %d already loaded, %d removed (deleted in Kounta), %d failed%s',
                 $count, $added, $existing, $removed, $failed, $rate_limited ? ', stopped early by API limit' : ''
             ));
 
@@ -797,7 +798,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                         esc_html__("%d new products added (%d already loaded%s).", "xwcpos"),
                         $added,
                         $existing,
-                        ($removed ? sprintf(esc_html__(", %d removed as no longer in Kounta", "xwcpos"), $removed) : '')
+                        ($removed ? sprintf(esc_html__(", %d removed as deleted in Kounta", "xwcpos"), $removed) : '')
                             . ($failed ? sprintf(esc_html__(", %d failed - see debug log", "xwcpos"), $failed) : '')
                     ),
                 )
@@ -1065,29 +1066,32 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
         }
 
         /**
-         * Remove products that are no longer in Kounta from the products table,
-         * if they were never imported into WooCommerce
+         * Remove products Kounta reports as deleted from the products table, if
+         * they were never imported into WooCommerce
          *
-         * Kounta's product list leaves out deleted products. Rows linked to a
+         * Kounta's product list leaves out deleted products, so each product
+         * missing from it is fetched on its own, and removed only if Kounta
+         * answers with deleted=true. A product that is missing for any other
+         * reason (not found, an API error) is kept. Rows linked to a
          * WooCommerce product are left alone: the product sync checks those and
-         * trashes or drafts the WooCommerce product.
+         * trashes the WooCommerce product.
          *
          * @param array $items Complete Kounta product list from xwcpos_fetch_simple_items()
          * @return int|WP_Error Number of rows removed
          */
-        public function xwcpos_remove_items_gone_from_kounta($items)
+        public function xwcpos_remove_items_deleted_in_kounta($items)
         {
             global $wpdb;
             $table = $wpdb->prefix . 'xwcpos_items';
 
             $kounta_ids = array();
             foreach ($items as $item) {
-                if (is_object($item) && isset($item->id)) {
+                if (is_object($item) && isset($item->id) && empty($item->deleted)) {
                     $kounta_ids[(string) $item->id] = true;
                 }
             }
 
-            // A partial product list would remove most of the table; refuse rather than guess
+            // A partial product list would mean a request for most of the table; refuse rather than guess
             $active = (int) $wpdb->get_var(
                 "SELECT COUNT(DISTINCT item_id) FROM {$table}
                  WHERE item_id IS NOT NULL AND item_id <> '' AND COALESCE(deleted, '0') <> '1'"
@@ -1110,25 +1114,41 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
                 return new WP_Error('query_failed', $wpdb->last_error);
             }
 
-            $removed = 0;
+            // Group by Kounta ID so each product is fetched once
+            $missing = array();
             foreach ($rows as $row) {
-                if (isset($kounta_ids[(string) $row->item_id])) {
+                if (!isset($kounta_ids[(string) $row->item_id])) {
+                    $missing[(string) $row->item_id][] = $row;
+                }
+            }
+
+            $api_client = new Kounta_API_Client();
+            $removed = 0;
+
+            foreach ($missing as $kounta_item_id => $item_rows) {
+                $k_product = $api_client->make_request('companies/' . $api_client->get_account_id() . '/products/' . $kounta_item_id);
+
+                if (is_wp_error($k_product) || !is_object($k_product) || empty($k_product->deleted)) {
+                    $reason = is_wp_error($k_product) ? $k_product->get_error_message() : 'Kounta does not report it as deleted';
+                    $this->plugin_log('Item id ' . $kounta_item_id . ' not in Kounta product list, kept: ' . substr($reason, 0, 200));
                     continue;
                 }
 
-                // Checks again that the row is not imported, in case it was imported since the query above
-                $deleted = $wpdb->query($wpdb->prepare(
-                    "DELETE FROM {$table} WHERE id = %d AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))",
-                    $row->id
-                ));
-                if (!$deleted) {
-                    continue;
-                }
+                foreach ($item_rows as $row) {
+                    // Checks again that the row is not imported, in case it was imported since the query above
+                    $deleted = $wpdb->query($wpdb->prepare(
+                        "DELETE FROM {$table} WHERE id = %d AND (wc_prod_id IS NULL OR wc_prod_id IN ('', '0'))",
+                        $row->id
+                    ));
+                    if (!$deleted) {
+                        continue;
+                    }
 
-                $wpdb->delete($wpdb->prefix . 'xwcpos_item_shops', array('xwcpos_item_id' => $row->id));
-                $wpdb->delete($wpdb->prefix . 'xwcpos_item_prices', array('xwcpos_item_id' => $row->id));
-                $this->plugin_log('Item id ' . $row->item_id . ' (' . $row->name . ') no longer in Kounta - removed from products table');
-                $removed++;
+                    $wpdb->delete($wpdb->prefix . 'xwcpos_item_shops', array('xwcpos_item_id' => $row->id));
+                    $wpdb->delete($wpdb->prefix . 'xwcpos_item_prices', array('xwcpos_item_id' => $row->id));
+                    $this->plugin_log('Item id ' . $row->item_id . ' (' . $row->name . ') deleted in Kounta - removed from products table');
+                    $removed++;
+                }
             }
 
             return $removed;
