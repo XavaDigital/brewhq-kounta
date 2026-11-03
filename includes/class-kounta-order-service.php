@@ -115,6 +115,12 @@ class Kounta_Order_Service {
                 $order_data['error_description'] ?? 'No description'
             ));
             Kounta_Order_Logger::log_order_failure($order_id, $order_data, array(), 0);
+
+            // Send email notification if enabled, as for upload failures
+            if (get_option('xwcpos_send_order_error_emails', true)) {
+                Kounta_Order_Logger::send_error_notification($order_id, $order_data);
+            }
+
             // Clear upload lock on preparation failure
             delete_transient('xwcpos_uploading_order_' . $order_id);
             return $order_data;
