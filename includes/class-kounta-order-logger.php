@@ -372,9 +372,10 @@ class Kounta_Order_Logger {
         // Build HTML email
         $message = self::build_error_email_html($order, $error, $order_data);
 
+        // No From header, so the site's mailer sends from its own address. A From on
+        // another domain (admin_email is @xavadigital.com, DMARC p=reject) gets rejected.
         $headers = array(
             'Content-Type: text/html; charset=UTF-8',
-            'From: ' . get_bloginfo('name') . ' <' . get_option('admin_email') . '>',
         );
 
         wp_mail($admin_email, $subject, $message, $headers);
