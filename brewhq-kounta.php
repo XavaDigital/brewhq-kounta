@@ -74,6 +74,12 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
     class BrewHQ_Kounta_POS_Int
     {
 
+        /**
+         * Why the last get_kounta_customer() call found no customer, as step => reason.
+         * Read by Kounta_Order_Service to explain customer_creation_failed.
+         */
+        public $last_customer_lookup_errors = array();
+
         public function __construct()
         {
 
@@ -2258,9 +2264,16 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $this->plugin_log("🚀 ASYNC UPLOAD STARTED: Order {$order_id} upload to Kounta started (background)");
 
             // Upload the order
-            $this->xwcpos_add_order_to_kounta($order_id);
+            $response = $this->xwcpos_add_order_to_kounta($order_id);
 
-            $this->plugin_log("✅ ASYNC UPLOAD COMPLETED: Order {$order_id} upload to Kounta completed");
+            if (!empty($response['success'])) {
+                $this->plugin_log("✅ ASYNC UPLOAD COMPLETED: Order {$order_id} uploaded to Kounta (Kounta order {$response['order_id']})");
+            } else {
+                // The legacy upload returns 'error' => true with the type in 'error_type'
+                $error = isset($response['error_type']) ? $response['error_type'] : (isset($response['error']) && $response['error'] !== true ? $response['error'] : 'unknown_error');
+                $description = isset($response['error_description']) ? $response['error_description'] : 'no description';
+                $this->plugin_log("❌ ASYNC UPLOAD FAILED: Order {$order_id} was not uploaded to Kounta - {$error}: {$description}");
+            }
         }
 
 
@@ -2531,54 +2544,92 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             );
 
             $customerID = '';
+            $this->last_customer_lookup_errors = array();
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
 
             if(isset($customerDetails['email'])){
-                $result = $this->get_customer_by_email($customerDetails['email']);
+                $result = $this->get_customer_by_email($customerDetails['email'], $error);
                 if($result){
                     $customerID = $result;
+                } else {
+                    $this->last_customer_lookup_errors['Email search'] = $error;
                 }
-                //log message
             }
 
             if(!$customerID){
-                $result = $this->get_customer_by_details($customerDetails);
+                $result = $this->get_customer_by_details($customerDetails, $error);
                 if($result){
                     $customerID = $result;
+                } else {
+                    $this->last_customer_lookup_errors['Name and phone search'] = $error;
                 }
-                //log message
             }
 
             //if customer not found, create customer
             if(!$customerID) {
                 $result = $this->xwcpos_make_api_call($endpoint, 'Create', '', $customerDetails);
                 if (!isset($result->error)) {
-                    $customerID = $this->get_customer_by_email($customerDetails['email']);
+                    $customerID = $this->get_customer_by_email($customerDetails['email'], $error);
+                    if (!$customerID) {
+                        $this->last_customer_lookup_errors['Create customer'] = 'no error returned (' . $this->describe_kounta_result($result) . ')';
+                        $this->last_customer_lookup_errors['Email search after create'] = $error;
+                    }
                 } else {
-                    //log $result->error, $result->error_description and user details
+                    $this->last_customer_lookup_errors['Create customer'] = $this->describe_kounta_result($result);
                 }
+            }
+
+            if ($customerID) {
+                $this->last_customer_lookup_errors = array();
             }
 
             return $customerID;
         }
 
-        public function get_customer_by_email($email)
+        /**
+         * Describe a Kounta API result in one line for logs, without customer details.
+         *
+         * @param mixed $result Result of xwcpos_make_api_call()
+         * @return string
+         */
+        private function describe_kounta_result($result)
+        {
+            if (is_object($result) && isset($result->error)) {
+                $description = isset($result->error_description) ? $result->error_description : 'no description';
+                return $result->error . ' - ' . $description;
+            }
+            if (is_array($result)) {
+                return 'list of ' . count($result) . ' records';
+            }
+            if (is_object($result)) {
+                return 'response without a customer ID (fields: ' . implode(', ', array_keys(get_object_vars($result))) . ')';
+            }
+            if ($result === '' || $result === null || $result === false) {
+                return 'empty response';
+            }
+            return 'non-JSON response: ' . substr(trim(wp_strip_all_tags((string) $result)), 0, 200);
+        }
+
+        public function get_customer_by_email($email, &$error = null)
         {
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
             $customerID = '';
+            $error = null;
 
             // Encode so a '+' in the address isn't read as a space by Kounta
             $result = $this->xwcpos_make_api_call($endpoint, 'Read', 'email='.rawurlencode($email));
-            if($result && !$result->error && $result->id){
+            if(is_object($result) && empty($result->error) && !empty($result->id)){
                 $customerID = $result->id;
+            } else {
+                $error = $this->describe_kounta_result($result);
             }
 
             return $customerID;
         }
 
-        public function get_customer_by_details($customerDetails)
+        public function get_customer_by_details($customerDetails, &$error = null)
         {
             $xwcpos_account_id = esc_attr(get_option('xwcpos_account_id'));
             $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
@@ -2587,13 +2638,18 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $fname = $customerDetails['first_name'];
             $lname = $customerDetails['last_name'];
             $phone = $customerDetails['phone'];
+            $error = null;
 
             if(isset($phone) && isset($fname) && isset($lname)){
                 $query_str = 'first_name='.rawurlencode($fname).'&last_name='.rawurlencode($lname).'&phone='.rawurlencode($phone);
                 $result = $this->xwcpos_make_api_call($endpoint, 'Read', $query_str);
-                if($result && $result->id){
+                if(is_object($result) && empty($result->error) && !empty($result->id)){
                     $customerID = $result->id;
+                } else {
+                    $error = $this->describe_kounta_result($result);
                 }
+            } else {
+                $error = 'skipped (name or phone missing)';
             }
 
             return $customerID;

@@ -109,6 +109,11 @@ class Kounta_Order_Service {
         $order_data = $this->prepare_order_data($order);
 
         if (isset($order_data['error'])) {
+            $order->add_order_note(sprintf(
+                'Order was not uploaded to Kounta. Error: %s - %s',
+                $order_data['error'],
+                $order_data['error_description'] ?? 'No description'
+            ));
             Kounta_Order_Logger::log_order_failure($order_id, $order_data, array(), 0);
             // Clear upload lock on preparation failure
             delete_transient('xwcpos_uploading_order_' . $order_id);
@@ -249,9 +254,20 @@ class Kounta_Order_Service {
             $customer_id = $this->get_or_create_customer($order);
             
             if (!$customer_id) {
+                $description = 'Failed to create or find customer';
+
+                // Add why each lookup step failed, recorded by the plugin's get_kounta_customer()
+                if ($this->plugin && !empty($this->plugin->last_customer_lookup_errors)) {
+                    $steps = array();
+                    foreach ($this->plugin->last_customer_lookup_errors as $step => $reason) {
+                        $steps[] = $step . ': ' . $reason;
+                    }
+                    $description .= '. ' . implode('; ', $steps);
+                }
+
                 return array(
                     'error' => 'customer_creation_failed',
-                    'error_description' => 'Failed to create or find customer',
+                    'error_description' => $description,
                 );
             }
             
