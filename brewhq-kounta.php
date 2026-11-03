@@ -2569,7 +2569,8 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $endpoint = 'companies/' . $xwcpos_account_id . '/customers';
             $customerID = '';
 
-            $result = $this->xwcpos_make_api_call($endpoint, 'Read', 'email='.$email);
+            // Encode so a '+' in the address isn't read as a space by Kounta
+            $result = $this->xwcpos_make_api_call($endpoint, 'Read', 'email='.rawurlencode($email));
             if($result && !$result->error && $result->id){
                 $customerID = $result->id;
             }
@@ -2588,7 +2589,7 @@ if (!class_exists('BrewHQ_Kounta_POS_Int')) {
             $phone = $customerDetails['phone'];
 
             if(isset($phone) && isset($fname) && isset($lname)){
-                $query_str = 'first_name='.$fname.'&last_name='.$lname.'&phone='.$phone;
+                $query_str = 'first_name='.rawurlencode($fname).'&last_name='.rawurlencode($lname).'&phone='.rawurlencode($phone);
                 $result = $this->xwcpos_make_api_call($endpoint, 'Read', $query_str);
                 if($result && $result->id){
                     $customerID = $result->id;
